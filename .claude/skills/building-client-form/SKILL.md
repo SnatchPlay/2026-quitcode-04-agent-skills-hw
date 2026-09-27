@@ -75,7 +75,7 @@ export async function addNote(_prev: NoteState, formData: FormData): Promise<Not
   if (text.length === 0 || text.length > 500) {
     return { status: "invalid", errors: { text: "Від 1 до 500 символів" }, values: { text } };
   }
-  await db.appendNote(leadId, text);
+  if (!(await db.appendNote(leadId, text))) throw new Error("Lead not found"); // видалено між перевіркою й записом
   after(() => logAudit("lead.note_added", leadId));
   return { status: "ok" };
 }
