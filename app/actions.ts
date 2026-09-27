@@ -54,16 +54,17 @@ export async function submitLead(
     },
   });
 
-  after(async () => {
-    await triggerWorkflow({
+  const idempotencyKey = randomUUID();
+  after(() => logAudit("lead.created", lead.id));
+  after(() =>
+    triggerWorkflow({
       event: "lead-created",
       data: { leadId: lead.id, company: lead.company, budget: lead.budget, source: lead.source },
-      idempotencyKey: `lead-created:${lead.id}`,
+      idempotencyKey,
       correlationId: randomUUID(),
       async: false,
-    });
-    await logAudit("lead.created", lead.id);
-  });
+    }),
+  );
 
   return { status: "ok" };
 }
@@ -99,12 +100,13 @@ export async function addNote(
   await requireLeadInUserWorkspace(id);
 
   const raw = formData.get("text");
-  const text = typeof raw === "string" ? raw.trim() : "";
+  // Browsers submit textarea line breaks as CRLF while maxLength counts them as one character.
+  const text = typeof raw === "string" ? raw.replace(/\r\n/g, "\n").trim() : "";
   if (text.length === 0 || text.length > NOTE_MAX_LENGTH) {
     return {
       status: "invalid",
       errors: { text: `Від 1 до ${NOTE_MAX_LENGTH} символів` },
-      values: { text: text.slice(0, NOTE_MAX_LENGTH) },
+      values: { text },
     };
   }
 
