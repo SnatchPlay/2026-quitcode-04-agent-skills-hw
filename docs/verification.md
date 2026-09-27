@@ -82,7 +82,7 @@ RSC-відповіді, сума розмірів JS-чанків, на які �
 
 ## Task B — `building-client-form`
 
-- Скіл: коміт `eb74387`; `name` = тека, `description` — 817 символів (≤ 1024), `SKILL.md` — 121 рядок на `eb74387` (129 після виправлень скіла `9283ab6` і `5f83104`).
+- Скіл: коміт `eb74387`; `name` = тека, `description` — 817 символів (≤ 1024), `SKILL.md` — 121 рядок на `eb74387` (129 після виправлень скіла `9283ab6` і `2fba922`).
 - Запит у свіжій сесії (скіл не названо), з кореня репозиторію:
   > На сторінці ліда в дашборді (/dashboard/leads/[id]) додай форму «Додати нотатку»: одне текстове поле до 500 символів; нотатка дописується до внутрішніх нотаток ліда.
 
@@ -157,7 +157,7 @@ RSC-відповіді, сума розмірів JS-чанків, на які �
   `processing` → `ready`; журнал сервера — лише
   `n8n out event=quote-request correlation=… attempt=1 result=202 ms=8` і
   `n8n in event=quote-request correlation=… result=202 bytes=382`;
-- `send-signed-callback.mjs` проти того ж роуту — 11/11 як очікувано (тоді 11 випадків; з `fc40a70` — 12, вивід нижче).
+- `send-signed-callback.mjs` проти того ж роуту — 11/11 як очікувано (тоді 11 випадків; з `656f089` — 12, вивід нижче).
 
 **`check-contract.mjs` на коді `main`** (`git archive main | tar -x -C ../leaddesk-main`, `main` = `01a7dd4`),
 exit 1:
@@ -201,7 +201,7 @@ exit 1; для мутацій з позначкою `want PASS` — навпак
 C8 для A3), сліпе рев'ю — вісім контрприкладів (незахищений колбек → N/A, проігнорований результат
 `timingSafeEqual`, `import * as`, `Object.fromEntries(formData)` у журналі, `runtime: string`, хибний FAIL на
 `signature === null`, вікно часу в хелпері, ліміт лише за `content-length`). Усі вони тепер — мутації.
-Фінальний прогін (скрипт з `fc40a70`):
+Фінальний прогін (скрипт з `656f089`):
 
 ```
 clean copy: exit 0, Summary: 13 PASS, 0 FAIL, 0 N/A
@@ -250,7 +250,7 @@ all mutations caught, clean copy passes
 старий код не чіпали → `Summary: 12 PASS, 0 FAIL, 1 N/A`, exit 0 — старі FAIL з `app/actions.ts:54` не
 рахуються; дописано рядок `fetch(process.env.N8N_WEBHOOK_BASE_URL + "/x")` (з порожнім рядком перед ним) у кінець
 `app/actions.ts` → C3, C4, C5, C6 FAIL саме на `app/actions.ts:79`, exit 1. Проєкт у підтеці репозиторію
-(`--root web`, після `fc40a70` — `git diff --relative`): `changed since HEAD~1: 1 file(s)`, `C1 FAIL lib/leak.ts:1`.
+(`--root web`, після `656f089` — `git diff --relative`): `changed since HEAD~1: 1 file(s)`, `C1 FAIL lib/leak.ts:1`.
 
 **Матриця колбеків** (`send-signed-callback.mjs`) на шаблонному роуті в копії і на фінальному коді гілки
 (продакшн-збірка, `node --env-file=.env.local …/send-signed-callback.mjs --url http://127.0.0.1:3000/api/n8n/quote-request`)
@@ -282,10 +282,10 @@ all cases as expected
 
 - `80397fa` — C6: `fetch` у неекспортованому хелпері, який Server Action викликає лише в `after()`, давав
   хибний FAIL (прогін A2); тепер C6 перевіряє місця виклику такого хелпера.
-- `ca5b1ee` — `check-contract.mjs` без 5 попереджень `no-unused-expressions` у `npm run lint`.
-- `54ceb41` — C8: порівняння довжин більше не вважається порівнянням підпису (хибний FAIL у прогоні A3).
-- `fc40a70` — контрприклади рецензента (див. вище) і chunked-випадок у `send-signed-callback.mjs`.
-- `3dbc7c6` — `SKILL.md` і `references/` узгоджено із запискою й кодом: правило 100 с тими ж словами, що в
+- `cd9043c` — `check-contract.mjs` без 5 попереджень `no-unused-expressions` у `npm run lint`.
+- `6bc086f` — C8: порівняння довжин більше не вважається порівнянням підпису (хибний FAIL у прогоні A3).
+- `656f089` — контрприклади рецензента (див. вище) і chunked-випадок у `send-signed-callback.mjs`.
+- `10235fa` — `SKILL.md` і `references/` узгоджено із запискою й кодом: правило 100 с тими ж словами, що в
   записці, п. 6 чекліста не суперечить повторам 5xx, Immediately — 2xx, межі матриці у Verify, потокове читання
   тіла, UUID для `lead-created`, шляхи мока від кореня проєкту, крок про форму посилається на
   `building-client-form`; `code-templates.md` перегенеровано з перезібраної й перевіреної копії
