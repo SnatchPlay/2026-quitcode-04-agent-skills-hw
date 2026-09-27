@@ -31,11 +31,12 @@
 Request з підписом. Значень секретів і тіл не друкує.
 
 ```bash
-node scripts/mock-n8n.mjs --help
-node --env-file=.env.local scripts/mock-n8n.mjs --mode respond-202 --delay 5000
+# з кореня проєкту
+node .claude/skills/integrating-n8n-webhooks/scripts/mock-n8n.mjs --help
+node --env-file=.env.local .claude/skills/integrating-n8n-webhooks/scripts/mock-n8n.mjs --mode respond-202 --delay 5000
 #   N8N_WEBHOOK_TOKEN → вимагає x-n8n-token (403 без нього); N8N_CALLBACK_SECRET → підписаний колбек
 #   на callbackUrl із запиту через 5 с
-node scripts/mock-n8n.mjs --mode slow --cloud-timeout 5000   # 524, як на Cloud
+node .claude/skills/integrating-n8n-webhooks/scripts/mock-n8n.mjs --mode slow --cloud-timeout 5000   # 524, як на Cloud
 ```
 
 У журналі мока: метод, шлях, статус, тривалість, імена заголовків, `auth=`, `idempotency=new|repeat|absent`.

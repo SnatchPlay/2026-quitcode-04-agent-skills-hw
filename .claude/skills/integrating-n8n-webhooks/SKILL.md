@@ -34,10 +34,10 @@ metadata:
 | Хто кличе n8n | лише `lib/n8n/client.ts`, перший рядок `import "server-only"` |
 | Запит | `POST ${N8N_WEBHOOK_BASE_URL}/<event>`; заголовки `x-n8n-token`, `idempotency-key` (UUID на операцію, збережений із записом), `x-correlation-id`; тіло `{ version: 1, event, data, callbackUrl? }`, `data` — мінімум |
 | Опції `fetch` | `signal: AbortSignal.timeout(10_000)`, `redirect: "error"`; до 2 повторів (1 с, 3 с) лише на мережеву помилку, таймаут, 5xx/524, з тим самим ключем |
-| Відповідь n8n | лише код статусу: async — рівно `202` + `job_id`; Immediately — `200`; 4xx не повторюємо |
-| Довгий воркфлоу (≥ ~100 с або невідомо) | лише асинхронно: Server Action зберігає запис `queued` і відповідає; виклик — в `after()` (Vercel `server-after-nonblocking`); права й валідація — у дії (Vercel `server-auth-actions`) |
+| Відповідь n8n | лише код статусу: async — рівно `202` + `job_id`; Immediately — `2xx` (n8n дає `200`); 4xx не повторюємо |
+| Воркфлоу, що може наблизитися до 100 с або триває невідомо скільки | лише асинхронно: Server Action зберігає запис `queued` і відповідає; виклик — в `after()` (Vercel `server-after-nonblocking`); права й валідація — у дії (Vercel `server-auth-actions`) |
 | `callbackUrl` | лише `${APP_BASE_URL}/api/n8n/<event>`, ніколи з вводу |
-| Колбек | `app/api/n8n/[event]/route.ts`: 404/415 → 413 → `request.text()` → ±300 с → HMAC-SHA256 `sha256=<hex>` від `` `${timestamp}.${raw}` ``, довжини + `timingSafeEqual` → застовпити `idempotency-key` (повтор → 200 `{duplicate:true}`) → `JSON.parse`, ключ = `` `${data.jobId}:${event}` `` → зберегти стан → **202** |
+| Колбек | `app/api/n8n/[event]/route.ts`: 404/415 → 413 за `content-length` → сире тіло потоком з обривом на 64 КБ (`readRawBody`) → ±300 с → HMAC-SHA256 `sha256=<hex>` від `` `${timestamp}.${raw}` ``, довжини + `timingSafeEqual` → застовпити `idempotency-key` (повтор → 200 `{duplicate:true}`) → `JSON.parse`, ключ = `` `${data.jobId}:${event}` `` → зберегти стан → **202** |
 | Runtime | Node.js; ніколи `runtime = "edge"` |
 | Журнали | подія, напрям, `x-correlation-id`, код, тривалість, спроба; ніколи тіла, ПД, токени, підписи |
 
@@ -53,7 +53,7 @@ metadata:
    тривалість невідома → Respond to Webhook 202 + колбек.
 2. `lib/n8n/client.ts`, `lib/n8n/callback.ts`, `app/api/n8n/[event]/route.ts` — з
    [code-templates.md](references/code-templates.md), без переписування.
-3. Запис фічі: id — `randomUUID()`, `status: "queued"`, `idempotencyKey`, `correlationId`; `after()` викликає
+3. Форма й дія — за патерном форм команди (`building-client-form`, якщо він є в проєкті). Запис фічі: id — `randomUUID()`, `status: "queued"`, `idempotencyKey`, `correlationId`; `after()` викликає
    `triggerWorkflow(…, async: true)` і зберігає `processing` + `jobId` або `failed`.
 4. Обробник колбека для події: знайти запис за `requestIdempotencyKey`, зберегти `ready`/`failed` і посилання
    до відповіді; завершений стан не перезаписувати.
@@ -69,7 +69,7 @@ metadata:
 - [ ] 3. Кожен виклик: x-n8n-token, idempotency-key, x-correlation-id, AbortSignal.timeout, redirect: "error".
 - [ ] 4. Повтори лише мережа/таймаут/5xx, не більше 2, той самий ключ.
 - [ ] 5. Server Action не чекає n8n: виклик у after(), дія повертає одразу.
-- [ ] 6. Async-успіх — лише 202 + job_id; інше → failed без повтору.
+- [ ] 6. Async-успіх — лише 202 + job_id; інший 2xx чи 4xx → failed без повтору (5xx — повтор, п. 4).
 - [ ] 7. Колбек: 413 до читання, request.text(), ±300 с, довжини + timingSafeEqual, потім JSON.parse.
 - [ ] 8. idempotency-key застовплено, звірено з тілом, звільнено після збою обробки.
 - [ ] 9. Стан збережено до відповіді 202; повторний колбек — 200 {duplicate:true}.
@@ -80,7 +80,7 @@ metadata:
 
 - у коді чи `.env.example` має з'явитися URL з `/webhook-test/` — навіть «тимчасово»;
 - секрет чи токен потрапляє в Client Component, `NEXT_PUBLIC_*`, query string, журнал або відповідь;
-- від дії вимагають синхронно дочекатися результату воркфлоу, який може тривати ≥ ~100 с або скільки — невідомо;
+- від дії вимагають синхронно дочекатися результату воркфлоу, який може наблизитися до 100 с або триває невідомо скільки;
 - `N8N_WEBHOOK_BASE_URL` — не `https://` і не локальна адреса (токен пішов би відкритим текстом);
 - `callbackUrl` чи адресу вебхука пропонують брати з вводу користувача;
 - потрібно `runtime = "edge"`, прибрати перевірку підпису, вікна часу чи ідемпотентності;
@@ -93,7 +93,7 @@ metadata:
 - [ ] `node .claude/skills/integrating-n8n-webhooks/scripts/check-contract.mjs` — 0 FAIL (для змін у гілці: `--changed-since <ref>`).
 - [ ] З моком (`node --env-file=.env.local .claude/skills/integrating-n8n-webhooks/scripts/mock-n8n.mjs --mode respond-202 --delay 5000`):
       форма відповідає одразу; у журналі мока `/webhook/<event> -> 202 … auth=ok idempotency=new`; колбек `-> 202`; статус-сторінка показує результат.
-- [ ] `node --env-file=.env.local .claude/skills/integrating-n8n-webhooks/scripts/send-signed-callback.mjs --url http://127.0.0.1:3000/api/n8n/<event>` — усі випадки як очікувано.
+- [ ] `node --env-file=.env.local .claude/skills/integrating-n8n-webhooks/scripts/send-signed-callback.mjs --url http://127.0.0.1:3000/api/n8n/<event>` — усі випадки як очікувано. Без `--job-id`/`--request-key` матриця перевіряє відмови (401/400/413/415/404); успіх 202 для наявного запису перевіряє сценарій з моком вище.
 - [ ] У журналі сервера немає тіл, email, телефонів, токенів і підписів.
 
 ## Файли скіла

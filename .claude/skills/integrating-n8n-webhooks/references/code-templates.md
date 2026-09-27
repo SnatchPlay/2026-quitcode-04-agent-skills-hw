@@ -13,6 +13,7 @@
 
 - `async: true` — Respond to Webhook: успіх лише `202` з `job_id`; `async: false` — Immediately: успіх `2xx`.
 - Повтори лише на мережеву помилку, таймаут і 5xx; той самий `idempotency-key`.
+- Немає змінної середовища → жодної спроби, `{ ok: false, reason: "misconfigured" }` — запис стане `failed`, а не зависне в `queued`.
 
 ```ts
 import "server-only";
@@ -38,7 +39,7 @@ export type TriggerOptions = {
 
 export type TriggerResult =
   | { ok: true; jobId: string | null; attempts: number }
-  | { ok: false; reason: "rejected" | "unexpected-response" | "unreachable"; status: number | null; attempts: number };
+  | { ok: false; reason: "misconfigured" | "rejected" | "unexpected-response" | "unreachable"; status: number | null; attempts: number };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -55,13 +56,23 @@ function logAttempt(options: TriggerOptions, attempt: number, startedAt: number,
 }
 
 export async function triggerWorkflow(options: TriggerOptions): Promise<TriggerResult> {
-  const url = `${env("N8N_WEBHOOK_BASE_URL")}/${options.event}`;
-  const envelope = JSON.stringify({
-    version: 1,
-    event: options.event,
-    data: options.data,
-    ...(options.async ? { callbackUrl: `${env("APP_BASE_URL")}/api/n8n/${options.event}` } : {}),
-  });
+  let url: string;
+  let token: string;
+  let envelope: string;
+  try {
+    url = `${env("N8N_WEBHOOK_BASE_URL")}/${options.event}`;
+    token = env("N8N_WEBHOOK_TOKEN");
+    envelope = JSON.stringify({
+      version: 1,
+      event: options.event,
+      data: options.data,
+      ...(options.async ? { callbackUrl: `${env("APP_BASE_URL")}/api/n8n/${options.event}` } : {}),
+    });
+  } catch (error) {
+    // A missing variable is a deploy error, not an outage: no retries, the caller marks the record failed.
+    console.error(`n8n out event=${options.event} correlation=${options.correlationId} misconfigured`, error instanceof Error ? error.message : "error");
+    return { ok: false, reason: "misconfigured", status: null, attempts: 0 };
+  }
   const maxAttempts = RETRY_DELAYS_MS.length + 1;
   let lastStatus: number | null = null;
 
@@ -72,7 +83,7 @@ export async function triggerWorkflow(options: TriggerOptions): Promise<TriggerR
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-n8n-token": env("N8N_WEBHOOK_TOKEN"),
+          "x-n8n-token": token,
           "idempotency-key": options.idempotencyKey,
           "x-correlation-id": options.correlationId,
         },
@@ -111,6 +122,8 @@ export async function triggerWorkflow(options: TriggerOptions): Promise<TriggerR
 ## 2. `lib/n8n/callback.ts` — ключі колбеків і розбір тіла після перевірки підпису
 
 Сховище ключів тут — пам'ять процесу (демо). У продакшні — таблиця з унікальним обмеженням на ключ.
+`readRawBody` читає `request.body` потоком і обриває на ліміті — chunked-запит без `content-length` не
+буферизується цілком.
 
 ```ts
 import "server-only";
@@ -130,6 +143,25 @@ export function claimCallbackKey(key: string): boolean {
 
 export function releaseCallbackKey(key: string): void {
   claimedKeys.delete(key);
+}
+
+// Raw body as text, or null once it exceeds maxBytes — stops reading instead of buffering a huge chunked body.
+export async function readRawBody(request: Request, maxBytes: number): Promise<string | null> {
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 export type N8nCallback = {
@@ -179,7 +211,7 @@ export function parseCallback(raw: string, pathEvent: string, idempotencyKey: st
 
 ```ts
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { claimCallbackKey, parseCallback, releaseCallbackKey, type N8nCallback } from "@/lib/n8n/callback";
+import { claimCallbackKey, parseCallback, readRawBody, releaseCallbackKey, type N8nCallback } from "@/lib/n8n/callback";
 import { applyQuoteCallback } from "@/lib/quotes";
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -212,9 +244,9 @@ export async function POST(request: Request, context: RouteContext<"/api/n8n/[ev
   if (mediaType !== "application/json") return reply(415);
   if (Number(request.headers.get("content-length") ?? "0") > MAX_BODY_BYTES) return reply(413);
 
-  const raw = await request.text();
+  const raw = await readRawBody(request, MAX_BODY_BYTES);
+  if (raw === null) return reply(413);
   const bytes = Buffer.byteLength(raw, "utf8");
-  if (bytes > MAX_BODY_BYTES) return reply(413);
 
   const timestamp = request.headers.get("x-n8n-timestamp") ?? "";
   const skew = Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp));
@@ -243,8 +275,8 @@ export async function POST(request: Request, context: RouteContext<"/api/n8n/[ev
 ## 4. Приклад фічі: `lib/quotes.ts`
 
 Запис знаходимо за `requestIdempotencyKey` з колбека, бо колбек може випередити збереження `jobId`;
-завершені стани (`ready`/`failed`) не перезаписуються; `recordTriggerResult` не повертає `ready` назад у
-`processing`. Id — `randomUUID()`, а `getQuoteStatus` віддає лише статус і посилання (без email).
+`ready` і `failed` від самого n8n не перезаписуються, а `failed` з боку тригера (таймаути) пізній підписаний колбек
+ще може виправити; `recordTriggerResult` не повертає `ready` назад у `processing`. Id — `randomUUID()`, а `getQuoteStatus` віддає лише статус і посилання (без email).
 
 ```ts
 import "server-only";
@@ -309,7 +341,8 @@ export async function recordTriggerResult(id: string, result: TriggerResult) {
 export async function applyQuoteCallback(callback: N8nCallback): Promise<"stored" | "unknown-request"> {
   const quote = [...quotes.values()].find((q) => q.idempotencyKey === callback.requestIdempotencyKey);
   if (!quote || (quote.jobId !== null && quote.jobId !== callback.jobId)) return "unknown-request";
-  if (quote.status === "ready" || quote.status === "failed") return "stored";
+  // Only a result from n8n is final: a trigger-side "failed" (timeouts) may still get a late signed callback.
+  if (quote.status === "ready" || (quote.status === "failed" && quote.jobId !== null)) return "stored";
   quote.jobId = callback.jobId;
   quote.status = callback.status === "completed" && callback.documentUrl ? "ready" : "failed";
   quote.documentUrl = callback.documentUrl;
@@ -319,7 +352,8 @@ export async function applyQuoteCallback(callback: N8nCallback): Promise<"stored
 
 ## 5. Приклад фічі: `app/quotes/actions.ts` — дія не чекає n8n
 
-Валідація — у дії (скіл форм команди); n8n отримує лише потрібне воркфлоу (без email).
+Публічна форма: сесії немає, тому дія сама валідує й обмежує кожне поле (скіл форм команди); n8n отримує лише
+потрібне воркфлоу (без email).
 
 ```ts
 "use server";
@@ -333,17 +367,18 @@ export type QuoteFormState =
   | { status: "idle" }
   | { status: "invalid"; errors: Partial<Record<"company" | "email" | "description" | "budget", string>>; values: Record<string, string> };
 
+// Public form: there is no session to check, so the action validates and bounds every field itself.
 export async function requestQuote(_prev: QuoteFormState, formData: FormData): Promise<QuoteFormState> {
   const field = (name: string) => {
     const value = formData.get(name);
-    return typeof value === "string" ? value.trim() : "";
+    return typeof value === "string" ? value.replace(/\r\n/g, "\n").trim() : "";
   };
   const values = { company: field("company"), email: field("email"), description: field("description"), budget: field("budget") };
   const errors: Partial<Record<"company" | "email" | "description" | "budget", string>> = {};
-  if (!values.company) errors.company = "Вкажіть компанію";
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.email)) errors.email = "Перевірте email";
-  if (values.description.length < 10) errors.description = "Опишіть задачу хоча б одним реченням";
-  const budget = values.budget === "" ? null : Number(values.budget);
+  if (!values.company || values.company.length > 120) errors.company = "Вкажіть компанію (до 120 символів)";
+  if (values.email.length > 200 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.email)) errors.email = "Перевірте email";
+  if (values.description.length < 10 || values.description.length > 2000) errors.description = "Опишіть задачу: від 10 до 2000 символів";
+  const budget = values.budget === "" ? null : Number(values.budget.replace(/\s/g, ""));
   if (budget !== null && (!Number.isInteger(budget) || budget < 0)) errors.budget = "Бюджет — ціле число доларів";
   if (Object.keys(errors).length > 0) return { status: "invalid", errors, values };
 
@@ -374,18 +409,22 @@ export async function requestQuote(_prev: QuoteFormState, formData: FormData): P
 
 ## 6. Подія «до відома» (`lead-created`, режим Immediately) у наявній дії
 
-Ключ детермінований (`lead-created:<id>`) — однаковий у повторах і унікальний для операції, окремо
-зберігати не треба. Аудит — там само, в `after()`.
+Ключ — UUID, створений один раз у дії й однаковий в усіх спробах. Аудит — в окремому `after()`, щоб збій
+чи повтори n8n його не затримували і не губили.
 
 ```ts
-  after(async () => {
-    await triggerWorkflow({
+  const idempotencyKey = randomUUID();
+  after(() => logAudit("lead.created", lead.id));
+  after(() =>
+    triggerWorkflow({
       event: "lead-created",
       data: { leadId: lead.id, company: lead.company, budget: lead.budget, source: lead.source },
-      idempotencyKey: `lead-created:${lead.id}`,
+      idempotencyKey,
       correlationId: randomUUID(),
       async: false,
-    });
+    }),
+  );
+
 ```
 
 ## 7. `.env.example`
@@ -394,7 +433,8 @@ export async function requestQuote(_prev: QuoteFormState, formData: FormData): P
 # LeadDesk local settings. Copy this file to .env.local and adjust it there.
 # .env* files are git-ignored (except this example), so real values never reach git.
 
-# Base of the n8n production webhook URLs. Locally: the offline mock on :5678.
+# Base of the n8n production webhook URLs (events: lead-created, quote-request).
+# Locally it points at the offline n8n mock: node tools/mock-n8n.mjs
 N8N_WEBHOOK_BASE_URL=http://127.0.0.1:5678/webhook
 # Header Auth value (x-n8n-token) and the HMAC secret for signed callbacks.
 # Generate: node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
