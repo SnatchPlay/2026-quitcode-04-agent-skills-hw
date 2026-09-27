@@ -45,6 +45,9 @@ metadata:
    на текст помилки з унікальним `id`; над формою підсумок у `role="alert"`.
 7. **Введене не зникає**: React 19 скидає неконтрольовані поля після дії — тому `defaultValue={values?.x}`,
    а для `<select>` і чекбоксів ще `key={values?.x}`, бо змінений `defaultValue` після монтування не діє.
+8. **Id запису — прихованим полем**, не `action.bind(null, id)`: у Next.js 16.3.5 прив'язана дія в
+   `useActionState` без JavaScript не отримала відповіді (перевірено в цьому проєкті). Id з форми —
+   такий самий ненадійний ввід, тому права перевіряє дія (крок 1.2).
 
 ```tsx
 // app/dashboard/leads/[id]/actions.ts
@@ -58,7 +61,9 @@ export type NoteState =
   | { status: "idle" | "ok" }
   | { status: "invalid"; errors: { text?: string }; values: { text: string } };
 
-export async function addNote(leadId: string, _prev: NoteState, formData: FormData): Promise<NoteState> {
+export async function addNote(_prev: NoteState, formData: FormData): Promise<NoteState> {
+  const rawId = formData.get("leadId");
+  const leadId = typeof rawId === "string" ? rawId : "";
   const user = await getCurrentUser();
   const [workspace, lead] = await Promise.all([getWorkspace(user.workspaceSlug), getLead(leadId)]);
   if (!lead || lead.workspaceId !== workspace.id) throw new Error("Lead not found");
@@ -76,11 +81,12 @@ export async function addNote(leadId: string, _prev: NoteState, formData: FormDa
 
 ```tsx
 // компонент форми, "use client"
-const [state, formAction, pending] = useActionState(addNote.bind(null, leadId), { status: "idle" });
+const [state, formAction, pending] = useActionState(addNote, { status: "idle" });
 const errors = state.status === "invalid" ? state.errors : {};
 const values = state.status === "invalid" ? state.values : undefined;
 
 <form action={formAction} noValidate>
+  <input type="hidden" name="leadId" value={leadId} />
   {state.status === "invalid" && <p role="alert">Перевірте поля, позначені нижче.</p>}
   <label htmlFor="note-text">Нотатка</label>
   <textarea id="note-text" name="text" maxLength={500} defaultValue={values?.text}
@@ -101,7 +107,7 @@ const values = state.status === "invalid" ? state.values : undefined;
 - [ ] 5. Жодного console.* з formData, email, телефоном, іменем чи тілом запиту.
 - [ ] 6. label/htmlFor, aria-invalid, aria-describedby, підсумок role="alert".
 - [ ] 7. Після помилки введене на місці, включно з <select> і чекбоксами.
-- [ ] 8. Форма відправляється без JavaScript.
+- [ ] 8. Форма відправляється без JavaScript; id запису — прихованим полем, не через .bind().
 ```
 
 ## Правила зупинки — зупинись і спитай людину, якщо:
