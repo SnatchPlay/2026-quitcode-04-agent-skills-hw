@@ -1,11 +1,13 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { headers } from "next/headers";
 import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 import { getCurrentUser, getLead, getWorkspace } from "@/lib/data";
+import { triggerWorkflow } from "@/lib/n8n/client";
 import { parseLeadForm, type LeadFormField } from "@/lib/lead-form";
 import { LEAD_STATUSES, NOTE_MAX_LENGTH, type LeadStatus } from "@/lib/types";
 
@@ -52,17 +54,16 @@ export async function submitLead(
     },
   });
 
-  try {
-    await fetch(process.env.N8N_WEBHOOK_URL!, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(lead),
+  after(async () => {
+    await triggerWorkflow({
+      event: "lead-created",
+      data: { leadId: lead.id, company: lead.company, budget: lead.budget, source: lead.source },
+      idempotencyKey: `lead-created:${lead.id}`,
+      correlationId: randomUUID(),
+      async: false,
     });
-  } catch (error) {
-    console.error(`Failed to send lead ${lead.id} to n8n`, error);
-  }
-
-  await logAudit("lead.created", lead.id);
+    await logAudit("lead.created", lead.id);
+  });
 
   return { status: "ok" };
 }
