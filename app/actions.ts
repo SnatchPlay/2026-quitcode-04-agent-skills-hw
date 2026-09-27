@@ -90,10 +90,11 @@ export type AddNoteState =
   | { status: "invalid"; errors: { text?: string }; values: { text: string } };
 
 export async function addNote(
-  id: string,
   _prevState: AddNoteState,
   formData: FormData,
 ): Promise<AddNoteState> {
+  const rawId = formData.get("leadId");
+  const id = typeof rawId === "string" ? rawId : "";
   await requireLeadInUserWorkspace(id);
 
   const raw = formData.get("text");

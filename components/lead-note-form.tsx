@@ -7,12 +7,13 @@ import { NOTE_MAX_LENGTH } from "@/lib/types";
 const initialState: AddNoteState = { status: "idle" };
 
 export function LeadNoteForm({ leadId }: { leadId: string }) {
-  const [state, formAction, pending] = useActionState(addNote.bind(null, leadId), initialState);
+  const [state, formAction, pending] = useActionState(addNote, initialState);
   const error = state.status === "invalid" ? state.errors.text : undefined;
   const values = state.status === "invalid" ? state.values : undefined;
 
   return (
     <form action={formAction} className="space-y-2" noValidate>
+      <input type="hidden" name="leadId" value={leadId} />
       {error && (
         <p role="alert" className="text-xs text-red-600">
           Перевірте поле, позначене нижче.
