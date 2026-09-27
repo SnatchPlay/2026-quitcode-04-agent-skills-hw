@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { claimCallbackKey, parseCallback, releaseCallbackKey, type N8nCallback } from "@/lib/n8n/callback";
+import { claimCallbackKey, parseCallback, readRawBody, releaseCallbackKey, type N8nCallback } from "@/lib/n8n/callback";
 import { applyQuoteCallback } from "@/lib/quotes";
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -32,9 +32,9 @@ export async function POST(request: Request, context: RouteContext<"/api/n8n/[ev
   if (mediaType !== "application/json") return reply(415);
   if (Number(request.headers.get("content-length") ?? "0") > MAX_BODY_BYTES) return reply(413);
 
-  const raw = await request.text();
+  const raw = await readRawBody(request, MAX_BODY_BYTES);
+  if (raw === null) return reply(413);
   const bytes = Buffer.byteLength(raw, "utf8");
-  if (bytes > MAX_BODY_BYTES) return reply(413);
 
   const timestamp = request.headers.get("x-n8n-timestamp") ?? "";
   const skew = Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp));
