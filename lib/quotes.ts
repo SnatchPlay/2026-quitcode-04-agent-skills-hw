@@ -60,7 +60,8 @@ export async function recordTriggerResult(id: string, result: TriggerResult) {
 export async function applyQuoteCallback(callback: N8nCallback): Promise<"stored" | "unknown-request"> {
   const quote = [...quotes.values()].find((q) => q.idempotencyKey === callback.requestIdempotencyKey);
   if (!quote || (quote.jobId !== null && quote.jobId !== callback.jobId)) return "unknown-request";
-  if (quote.status === "ready" || quote.status === "failed") return "stored";
+  // Only a result from n8n is final: a trigger-side "failed" (timeouts) may still get a late signed callback.
+  if (quote.status === "ready" || (quote.status === "failed" && quote.jobId !== null)) return "stored";
   quote.jobId = callback.jobId;
   quote.status = callback.status === "completed" && callback.documentUrl ? "ready" : "failed";
   quote.documentUrl = callback.documentUrl;
