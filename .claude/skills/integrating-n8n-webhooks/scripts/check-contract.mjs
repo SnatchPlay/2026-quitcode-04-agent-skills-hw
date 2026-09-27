@@ -217,6 +217,19 @@ function functionsContaining(text, needle) {
   return names;
 }
 
+// Top-level and nested function definitions with their body range: function NAME(…) {…} and const NAME = (…) => {…}.
+function functionRanges(text) {
+  const out = [];
+  const re = /(export\s+)?(?:async\s+)?function\s+([\w$]+)\s*\(|(export\s+)?(?:const|let)\s+([\w$]+)\s*(?::[^=]+)?=\s*(?:async\s*)?(?:\([^)]*\)|[\w$]+)\s*(?::[^=]+)?=>\s*\{/g;
+  for (let m; (m = re.exec(text)); ) {
+    const name = m[2] ?? m[4];
+    const nameIndex = m.index + m[0].indexOf(name, m[0].search(/function|const|let/));
+    const open = m[2] ? text.indexOf("{", matchClose(text, m.index + m[0].length - 1)) : m.index + m[0].length - 1;
+    out.push({ name, nameIndex, exported: Boolean(m[1] ?? m[3]), start: m.index, end: matchClose(text, open) });
+  }
+  return out;
+}
+
 function importsFrom(text, modulePattern) {
   const names = [];
   const re = /import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']([^"']+)["']/g;
@@ -354,12 +367,23 @@ function linesMatching(file, re, text = read(file)) {
     subjects.push(file);
     const afterRanges = calls(text, "after").map((c) => [c.start, c.end]);
     const inside = (i) => afterRanges.some(([s, e]) => i > s && i < e);
+    // A fetch inside a local (non-exported) helper is fine if every call of that helper is inside after().
+    const localFns = functionRanges(text);
+    const directFindings = [];
+    for (const c of directFetches) {
+      if (inside(c.start)) continue;
+      const owner = localFns.filter((f) => c.start > f.start && c.start < f.end).sort((a, b) => a.end - a.start - (b.end - b.start))[0];
+      if (owner && !owner.exported) names.add(owner.name);
+      else directFindings.push(at(file, c.line, "Server Action awaits n8n, not in after()", c.endLine));
+    }
     for (const name of names) {
+      const owner = localFns.find((f) => f.name === name);
       for (const c of calls(text, name)) {
+        if (owner && (c.start === owner.nameIndex || (c.start > owner.start && c.start < owner.end))) continue;
         if (!inside(c.start)) findings.push(at(file, lineAt(text, c.start), `${name}() runs in the Server Action, not in after()`));
       }
     }
-    for (const c of directFetches) if (!inside(c.start)) findings.push(at(file, c.line, "Server Action awaits n8n, not in after()", c.endLine));
+    findings.push(...directFindings);
   }
   report("C6", "Server Actions call n8n only inside after()", subjects.length, findings);
 }
