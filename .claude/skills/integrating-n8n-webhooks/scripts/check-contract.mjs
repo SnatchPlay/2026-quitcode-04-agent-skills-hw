@@ -117,7 +117,7 @@ const counts = (finding) => {
   if (!changed) return true;
   const lines = changed.get(finding.file);
   if (!lines) return false;
-  if (lines === "all" || finding.line === 0) return true;
+  if (lines === "all" || finding.fileLevel) return true;
   for (let n = finding.line; n <= (finding.endLine ?? finding.line); n++) if (lines.has(n)) return true;
   return false;
 };
@@ -567,7 +567,8 @@ function importedHelperSources(file) {
       const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*)$/.exec(l);
       if (m) entries.set(m[1], { value: m[2].trim().replace(/^["']|["']$/g, ""), line: i + 1 });
     });
-    for (const key of CONTRACT) if (!entries.has(key)) findings.push(at(envExample, 0, `missing ${key}`));
+    const lastLine = lines.length - (lines[lines.length - 1] === "" ? 1 : 0);
+    for (const key of CONTRACT) if (!entries.has(key)) findings.push({ ...at(envExample, lastLine, `missing ${key} (add it after this line)`), fileLevel: true });
     for (const [key, { value, line }] of entries) {
       if (/^N8N_/.test(key) && !CONTRACT.includes(key)) findings.push(at(envExample, line, `${key} is not a contract variable`));
       if (/TOKEN|SECRET|PASSWORD|API_KEY/.test(key) && !/^change-me-/.test(value)) findings.push(at(envExample, line, `${key}: secrets in .env.example must be change-me-… placeholders (value not shown)`));
@@ -576,7 +577,7 @@ function importedHelperSources(file) {
     if (base && !/^https?:\/\/[^\s]+\/webhook$/.test(base.value)) findings.push(at(envExample, base.line, "N8N_WEBHOOK_BASE_URL must be an http(s) URL ending with /webhook"));
     const app = entries.get("APP_BASE_URL");
     if (app && !/^https?:\/\/[^\s/]+(:\d+)?$/.test(app.value)) findings.push(at(envExample, app.line, "APP_BASE_URL must be an origin like http://127.0.0.1:3000"));
-  } else if (!envExample && usesN8n && !changed) findings.push(at(".env.example", 0, "missing .env.example"));
+  } else if (!envExample && usesN8n && !changed) findings.push({ ...at(".env.example", 1, "missing .env.example (file does not exist)"), fileLevel: true });
   report("C12", ".env.example and N8N_* names follow the contract", (envExample && inScope(envExample)) || usesN8n, findings);
 }
 
@@ -609,7 +610,7 @@ const scope = changed ? ` · changed since ${changedSince}: ${[...changed.keys()
 console.log(`check-contract · root ${root} · ${codeFiles.length + (envExample ? 1 : 0)} file(s)${scope}`);
 for (const r of results) {
   console.log(`${r.id.padEnd(4)} ${r.status.padEnd(4)} ${r.title}`);
-  for (const f of r.findings) console.log(`       ${f.file}${f.line ? `:${f.line}` : ""}  ${f.message}`);
+  for (const f of r.findings) console.log(`       ${f.file}:${f.line}  ${f.message}`);
 }
 const fail = results.filter((r) => r.status === "FAIL").length;
 const pass = results.filter((r) => r.status === "PASS").length;
