@@ -60,7 +60,7 @@ export function QuoteForm() {
         <label htmlFor="quote-budget" className="block text-sm font-medium">
           Бюджет, $
         </label>
-        <input id="quote-budget" name="budget" type="number" min={0} step={1} defaultValue={values.budget} className={inputClass} {...describe("budget")} />
+        <input id="quote-budget" name="budget" inputMode="numeric" autoComplete="off" defaultValue={values.budget} className={inputClass} {...describe("budget")} />
         {error("budget")}
       </div>
 
