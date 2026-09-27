@@ -96,7 +96,8 @@ if (changedSince) {
   }
   changed = new Map();
   let current = null;
-  for (const line of git(["diff", "-U0", "--no-color", changedSince, "--"]).split("\n")) {
+  // --relative: paths relative to --root even when the project is a subfolder of the git repo.
+  for (const line of git(["diff", "-U0", "--no-color", "--relative", changedSince, "--", "."]).split("\n")) {
     if (line.startsWith("+++ ")) {
       current = line === "+++ /dev/null" ? null : line.slice(6);
       if (current && !changed.has(current)) changed.set(current, new Set());
@@ -188,7 +189,8 @@ function matchClose(text, open) {
 }
 
 function calls(text, name) {
-  const re = new RegExp(`(?<![\\w$.])${name.replace(/[.$]/g, "\\$&")}\\s*\\(`, "g");
+  const pattern = name.endsWith(".*") ? `${name.slice(0, -2).replace(/\$/g, "\\$")}\\.[\\w$]+` : name.replace(/[.$]/g, "\\$&");
+  const re = new RegExp(`(?<![\\w$.])${pattern}\\s*\\(`, "g");
   const found = [];
   for (let m; (m = re.exec(text)); ) {
     const open = m.index + m[0].length - 1;
@@ -200,6 +202,7 @@ function calls(text, name) {
 
 // Source of `const|let|var NAME = …` or `function NAME(…) {…}` in the file, to resolve identifiers.
 function definition(text, name) {
+  if (!/^[A-Za-z_$][\w$]*$/.test(name ?? "")) return null;
   const decl = new RegExp(`(?:const|let|var)\\s+${name}\\s*(?::[^=]+)?=\\s*`).exec(text);
   if (decl) {
     let i = decl.index + decl[0].length;
@@ -242,6 +245,10 @@ function functionRanges(text) {
 
 function importsFrom(text, modulePattern) {
   const names = [];
+  // import * as n8n from "…" -> calls look like n8n.something(…); report the namespace as "n8n.*".
+  for (const m of text.matchAll(/import\s+\*\s+as\s+([\w$]+)\s+from\s*["']([^"']+)["']/g)) {
+    if (modulePattern.test(m[2])) names.push(`${m[1]}.*`);
+  }
   const re = /import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']([^"']+)["']/g;
   for (let m; (m = re.exec(text)); ) {
     if (!modulePattern.test(m[2]) || /^import\s+type/.test(m[0])) continue;
@@ -358,7 +365,7 @@ function linesMatching(file, re, text = read(file)) {
     for (let m; (m = re.exec(text)); ) {
       const name = m[1] ?? m[2];
       const def = definition(text, name) ?? "";
-      if (clientNames.some((n) => new RegExp(`(?<![\\w$.])${n}\\s*\\(`).test(def))) helpers.add(name);
+      if (clientNames.some((n) => calls(def, n).length > 0)) helpers.add(name);
     }
     reaching.set(file, helpers);
   }
@@ -398,9 +405,14 @@ function linesMatching(file, re, text = read(file)) {
   report("C6", "Server Actions call n8n only inside after()", subjects.length, findings);
 }
 
-// Callback routes: Route Handlers that verify n8n callbacks.
+// Callback routes: Route Handlers that receive n8n callbacks — by what they verify, or by where they live
+// (an unprotected callback has nothing to verify, so it must not fall through as N/A).
 const callbackRoutes = codeFiles.filter(
-  (f) => /(^|\/)app\/.*\/route\.(ts|js)$/.test(f) && /x-n8n-signature|N8N_CALLBACK_SECRET/.test(code(f)) && inScope(f),
+  (f) =>
+    /(^|\/)app\/.*\/route\.(ts|js)$/.test(f) &&
+    (/x-n8n-signature|N8N_CALLBACK_SECRET/.test(code(f)) || /(^|\/)app\/api\/(.*\/)?(n8n|[^/]*callback[^/]*|[^/]*webhook[^/]*)\//.test(f)) &&
+    /export\s+(?:async\s+)?function\s+POST\b|export\s+const\s+POST\b/.test(code(f)) &&
+    inScope(f),
 );
 // Helper modules the routes import (for verification/parsing done in lib/…).
 function importedHelperSources(file) {
@@ -432,43 +444,93 @@ function importedHelperSources(file) {
     }
     const post = /export\s+(?:async\s+)?function\s+POST\s*\(|export\s+const\s+POST\s*=/.exec(text);
     if (!post) {
-      f7.push(at(file, 0, "no POST handler found"));
+      f7.push(at(file, 1, "no POST handler found"));
       continue;
     }
+    const postLine = lineAt(text, post.index);
     const bodyOpen = text.indexOf("{", matchClose(text, text.indexOf("(", post.index)));
     const bodyStart = bodyOpen;
     const bodyEnd = matchClose(text, bodyOpen);
     const body = text.slice(bodyStart, bodyEnd);
+    const sources = [text, ...helpers.map((h) => h.text)];
     const first = (names) =>
       Math.min(...[...names].flatMap((n) => calls(body, n).map((c) => c.start)), Infinity);
     const verifyAt = first(verifyNames);
     const parseAt = Math.min(first(parseNames), ...[...body.matchAll(/\.json\s*\(\s*\)/g)].map((m) => m.index));
-    if (!/\.text\s*\(\s*\)/.test(body)) f7.push(at(file, lineAt(text, bodyStart), "body is not read with request.text()"));
-    if (verifyAt === Infinity) f7.push(at(file, lineAt(text, bodyStart), "no signature verification (timingSafeEqual) in POST"));
+    // Raw body: request.text(), or a local/imported helper that streams request.body (getReader).
+    const rawReaders = new Set(functionsContaining(text, /getReader\s*\(/));
+    for (const h of helpers) for (const n of functionsContaining(h.text, /getReader\s*\(/)) if (h.names.includes(n)) rawReaders.add(n);
+    const readsRaw = /\.text\s*\(\s*\)/.test(body) || [...rawReaders].some((n) => calls(body, n).length > 0);
+    if (!readsRaw) f7.push(at(file, postLine, "body is not read raw (request.text() or a request.body reader)"));
+    if (verifyAt === Infinity) f7.push(at(file, postLine, "no signature verification (timingSafeEqual) in POST"));
     else if (parseAt < verifyAt) f7.push(at(file, lineAt(text, bodyStart + parseAt), "JSON parsed before the signature is verified"));
 
-    const verifySources = [text, ...helpers.map((h) => h.text)].filter((t) => /timingSafeEqual\s*\(/.test(t));
-    const verifierHasLengthCheck = verifySources.some((t) =>
-      [...functionsContaining(t, /timingSafeEqual\s*\(/)].some((n) => /\.length\s*[!=]==?/.test(definition(t, n) ?? "")),
+    // timingSafeEqual must decide something: returned, assigned or used in a condition — not a bare statement.
+    const safeCalls = sources.flatMap((t) =>
+      calls(t, "timingSafeEqual").map((c) => ({ t, c, prefix: t.slice(Math.max(t.lastIndexOf(";", c.start), t.lastIndexOf("{", c.start), t.lastIndexOf("}", c.start)) + 1, c.start) })),
     );
-    if (!verifySources.length) f8.push(at(file, 0, "timingSafeEqual is not used"));
-    else if (!verifierHasLengthCheck) f8.push(at(file, 0, "no length check before timingSafeEqual (it throws on different lengths)"));
+    const usedSafe = safeCalls.filter(({ prefix }) => /\breturn\b|\bif\s*\(|&&|\|\||[!?:=]\s*$/.test(prefix));
+    const hasLengthCheck = usedSafe.some(({ t, c }) => {
+      const owner = functionRanges(t).filter((f) => c.start > f.start && c.start < f.end).sort((a, b) => a.end - a.start - (b.end - b.start))[0];
+      return /\.length\s*[!=]==?/.test(owner ? t.slice(owner.start, owner.end) : t.slice(Math.max(0, c.start - 300), c.start));
+    });
+    if (!safeCalls.length) f8.push(at(file, postLine, "timingSafeEqual is not used"));
+    else if (!usedSafe.length) f8.push(at(file, postLine, "timingSafeEqual result is ignored"));
+    else if (!hasLengthCheck) f8.push(at(file, postLine, "no length check before timingSafeEqual (it throws on different lengths)"));
     for (const [f, t] of [[file, text], ...helpers.map((h) => [h.file, h.text])]) {
       t.split("\n").forEach((l, i) => {
         for (const m of l.matchAll(/[!=]==?/g)) {
           const left = l.slice(0, m.index).split(/&&|\|\||\(|,|!(?!=)|\breturn\b|\bif\b/).pop().trim();
           const right = l.slice(m.index + m[0].length).split(/&&|\|\||\)|;|,|\?/)[0].trim();
           if ([left, right].every((s) => /\.length$/.test(s))) continue;
+          // presence / type checks (x === null, typeof x !== "string") are not signature comparisons
+          if ([left, right].some((s) => /^(null|undefined)$|^(["'])[^"'$]*\2$|^typeof\b/.test(s))) continue;
           if ([left, right].some((s) => /signature|digest|hmac|expected|sha256=/i.test(s))) f8.push(at(f, i + 1, "signature compared with ===/!== instead of timingSafeEqual"));
         }
       });
     }
 
+    // A statement that answers `status` when a comparison against the limit holds. The limit is a literal or
+    // a const; the checked value (or the helper that computes it) must match `needs`.
+    const resolvesTo = (t, token, limitRe) => limitRe.test(token) || (/^[\w$]+$/.test(token) && limitRe.test(definition(t, token) ?? ""));
+    const isLimit = (token, limitRe) => sources.some((s) => resolvesTo(s, token.trim(), limitRe));
+    // helpers (route or imported) that compare a `needs` value against a bound
+    const boundHelpers = (limitRe, needs) =>
+      sources.flatMap((ht) =>
+        functionRanges(ht).filter((fn) => {
+          const def = ht.slice(fn.start, fn.end);
+          return needs.test(def) && /[<>]=?\s*[\w$.]+/.test(def) && fn.name !== "POST";
+        }).map((fn) => ({ ...fn, ownLimit: [...ht.slice(fn.start, fn.end).matchAll(/[<>]=?\s*([\w$.]+)/g)].some((m) => isLimit(m[1], limitRe)) })),
+      );
+    const guarded = (status, limitRe, needs) => {
+      const helpersFor = boundHelpers(limitRe, needs);
+      return sources.some((t) =>
+        t.split(/;|\n\s*\n/).some((st) => {
+          if (!new RegExp(`\\b${status}\\b`).test(st)) return false;
+          // direct: `x > LIMIT` in the statement, where x (or its definition) is the measured value
+          for (const m of st.matchAll(/([\w$.()[\]"'`\s/*+-]+?)\s*>=?\s*([\w$.]+)/g)) {
+            if (!isLimit(m[2], limitRe)) continue;
+            const lhs = m[1].trim().split(/\s|\(|!/).pop();
+            if (needs.test(st) || needs.test(definition(t, lhs) ?? "")) return true;
+          }
+          // via a helper: the statement calls it (or tests a variable it produced), and the helper either
+          // compares against the limit itself or receives the limit as an argument at that call
+          const produced = [...st.matchAll(/\b([\w$]+)\s*[!=]==?\s*null\b|!\s*([\w$]+)\b/g)].map((v) => definition(t, v[1] ?? v[2]) ?? "");
+          return helpersFor.some((fn) =>
+            [st, ...produced].some((src) =>
+              calls(src, fn.name).some((c) => fn.ownLimit || c.args.split(",").some((a) => isLimit(a, limitRe))),
+            ),
+          );
+        }),
+      );
+    };
+    const WINDOW = /^(300|5\s*\*\s*60|300_?000)$|=\s*(300|5\s*\*\s*60|300_?000)\s*$|^\s*(300|5\s*\*\s*60|300_?000)\s*;?\s*$/;
+    const LIMIT = /^(64\s*\*\s*1024|65_?536)$|^\s*(64\s*\*\s*1024|65_?536)\s*;?\s*$/;
     const readsTimestamp = /["'`]x-n8n-timestamp["'`]/.test(text);
-    const window = /\b300\b|\b5\s*\*\s*60\b|\b300_?000\b/.test(text);
-    if (!readsTimestamp || !window || !/Math\.abs\s*\(/.test(text)) f9.push(at(file, 0, "no +-300 s check of x-n8n-timestamp (Math.abs(now - timestamp) > 300)"));
-
-    if (!/\b(64\s*\*\s*1024|65_?536)\b/.test(text) || !/\b413\b/.test(text)) f10.push(at(file, 0, "no 64 KB body limit answered with 413"));
+    if (!readsTimestamp || !guarded(401, WINDOW, /Math\.abs\s*\([^;]*Date\.now|Date\.now[^;]*Math\.abs/))
+      f9.push(at(file, postLine, "no x-n8n-timestamp check: |now - timestamp| > 300 s -> 401"));
+    if (!guarded(413, LIMIT, /byteLength|\.length|getReader|\bsize\b/))
+      f10.push(at(file, postLine, "no limit on the body actually read: > 64 KB -> 413 (content-length alone is not enough)"));
   }
   const n = callbackRoutes.length;
   report("C7", "callback: raw body, JSON only after signature check", n, f7);
@@ -481,7 +543,7 @@ function importedHelperSources(file) {
 {
   const files = codeFiles.filter(inScope);
   const findings = files.flatMap((f) =>
-    linesMatching(f, /export\s+const\s+runtime\s*=\s*["'`]edge["'`]/, code(f)).map((l) => at(f, l, 'runtime = "edge" (node:crypto is required)')),
+    linesMatching(f, /export\s+const\s+runtime\s*(?::[^=]+)?=\s*["'`]edge["'`]/, code(f)).map((l) => at(f, l, 'runtime = "edge" (node:crypto is required)')),
   );
   report("C11", 'no runtime = "edge"', files.length, findings);
 }
@@ -526,12 +588,17 @@ function importedHelperSources(file) {
       (f.startsWith("lib/n8n/") || callbackRoutes.includes(f) || importsFrom(code(f), CLIENT_IMPORT).length || n8nFetches.some((c) => c.file === f)),
   );
   const FORBIDDEN = /\b(raw|rawBody|body|payload|envelope|formData|email|phone|token|signature|secret|headers)\b(?!\s*\.\s*(length|id)\b)/;
+  const DERIVED = /formData|Object\.fromEntries|\.json\s*\(|\.text\s*\(\s*\)|readRawBody|request\.headers(?!\.get\(\s*["'`]x-correlation-id)/;
   const findings = [];
   for (const f of n8nFiles) {
     const text = code(f);
     for (const c of calls(text, "console.log").concat(calls(text, "console.info"), calls(text, "console.warn"), calls(text, "console.error"), calls(text, "console.debug"))) {
       const args = c.args.replace(/(["'])(?:\\.|(?!\1).)*\1/g, '""').replace(/`(?:\\.|[^`$]|\$(?!\{))*`/g, (t) => t.replace(/[^$]*?(\$\{[^}]*\})?/g, "$1"));
-      if (FORBIDDEN.test(args)) findings.push(at(f, lineAt(text, c.start), "console.* logs a body, form data, PII, token or signature"));
+      // an identifier whose value comes from the form, the request body or a raw body counts as that data
+      const derived = [...args.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\b/g)].some((m) =>
+        DERIVED.test(definition(text, m[1]) ?? ""),
+      );
+      if (FORBIDDEN.test(args) || derived) findings.push(at(f, lineAt(text, c.start), "console.* logs a body, form data, PII, token or signature"));
     }
   }
   report("C13", "no bodies, PII or secrets in logs", n8nFiles.length, findings);

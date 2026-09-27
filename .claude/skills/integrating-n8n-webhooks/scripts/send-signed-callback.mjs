@@ -18,7 +18,7 @@ Usage:
 Needs N8N_CALLBACK_SECRET in the environment (same value as the app).
 Cases: valid, duplicate, wrong signature, missing signature, expired (-301 s), future (+301 s),
 body reformatted after signing, key not bound to the body, wrong content-type, unknown event,
-body over 64 KB. Exit code 1 if any case gets an unexpected status.`;
+body over 64 KB (with and without content-length). Exit code 1 if any case gets an unexpected status.`;
 
 const argv = process.argv.slice(2);
 const opt = {};
@@ -90,7 +90,30 @@ const cases = [
   ["content-type text/plain", 415, () => send({ raw: bodyFor(randomUUID()), type: "text/plain" })],
   ["unknown event in the path", 404, () => send({ target: unknownPath, raw: bodyFor(randomUUID()) })],
   ["body over 64 KB", 413, () => send({ raw: huge })],
+  ["body over 64 KB, chunked, no content-length", 413, () => sendChunked(huge)],
 ];
+
+// Streams the body so fetch sends Transfer-Encoding: chunked without content-length.
+async function sendChunked(raw) {
+  const ts = now();
+  const bytes = new TextEncoder().encode(raw);
+  const stream = new ReadableStream({
+    start(controller) {
+      for (let i = 0; i < bytes.length; i += 8192) controller.enqueue(bytes.slice(i, i + 8192));
+      controller.close();
+    },
+  });
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-n8n-timestamp": String(ts), "x-n8n-signature": sign(ts, raw), "idempotency-key": `${randomUUID()}:${event}` },
+    body: stream,
+    duplex: "half",
+    redirect: "manual",
+    signal: AbortSignal.timeout(10_000),
+  });
+  await res.arrayBuffer();
+  return res.status;
+}
 
 let failed = 0;
 console.log(`callback matrix -> ${url.origin}${url.pathname} (event ${event}; ${real ? "real request" : "no real request: valid case expects 404"})`);
