@@ -182,10 +182,10 @@ C10  N/A  callback: 64 KB limit -> 413
 C11  PASS no runtime = "edge"
 C12  FAIL .env.example and N8N_* names follow the contract
        app/actions.ts:54  N8N_WEBHOOK_URL is not a contract variable
-       .env.example  missing N8N_WEBHOOK_BASE_URL
-       .env.example  missing N8N_WEBHOOK_TOKEN
-       .env.example  missing N8N_CALLBACK_SECRET
-       .env.example  missing APP_BASE_URL
+       .env.example:6  missing N8N_WEBHOOK_BASE_URL (add it after this line)
+       .env.example:6  missing N8N_WEBHOOK_TOKEN (add it after this line)
+       .env.example:6  missing N8N_CALLBACK_SECRET (add it after this line)
+       .env.example:6  missing APP_BASE_URL (add it after this line)
        .env.example:6  N8N_WEBHOOK_URL is not a contract variable
 C13  PASS no bodies, PII or secrets in logs
 Summary: 3 PASS, 6 FAIL, 4 N/A
@@ -201,7 +201,7 @@ exit 1; для мутацій з позначкою `want PASS` — навпак
 C8 для A3), сліпе рев'ю — вісім контрприкладів (незахищений колбек → N/A, проігнорований результат
 `timingSafeEqual`, `import * as`, `Object.fromEntries(formData)` у журналі, `runtime: string`, хибний FAIL на
 `signature === null`, вікно часу в хелпері, ліміт лише за `content-length`). Усі вони тепер — мутації.
-Фінальний прогін (скрипт з `656f089`):
+Фінальний прогін (після рев'ю CodeRabbit; харнес додатково перевіряє, що кожен рядок FAIL має вигляд `файл:рядок`):
 
 ```
 clean copy: exit 0, Summary: 13 PASS, 0 FAIL, 0 N/A
@@ -235,7 +235,7 @@ ok   C9   no timestamp window                                     -> FAIL (want 
 ok   C10  no 64 KB limit                                          -> FAIL (want FAIL), exit 1  app/api/n8n/[event]/route.ts:25  no limit on the body actually read: > 64 KB -> 413 (content-length alone is not enough)
 ok   C11  runtime = "edge" on the route                           -> FAIL (want FAIL), exit 1  app/api/n8n/[event]/route.ts:5  runtime = "edge" (node:crypto is required)
 ok   C12  real-looking secret in .env.example                     -> FAIL (want FAIL), exit 1  .env.example:9  N8N_WEBHOOK_TOKEN: secrets in .env.example must be change-me-… placeholders (value not shown)
-ok   C12  APP_BASE_URL missing, extra N8N_WEBHOOK_URL             -> FAIL (want FAIL), exit 1  .env.example  missing APP_BASE_URL
+ok   C12  APP_BASE_URL missing, extra N8N_WEBHOOK_URL             -> FAIL (want FAIL), exit 1  .env.example:12  missing APP_BASE_URL (add it after this line)
 ok   C13  raw callback body logged                                -> FAIL (want FAIL), exit 1  app/api/n8n/[event]/route.ts:58  console.* logs a body, form data, PII, token or signature
 ok   C13  email logged in the Server Action flow                  -> FAIL (want FAIL), exit 1  app/quotes/actions.ts:42  console.* logs a body, form data, PII, token or signature
 all mutations caught, clean copy passes
@@ -290,6 +290,8 @@ all cases as expected
   тіла, UUID для `lead-created`, шляхи мока від кореня проєкту, крок про форму посилається на
   `building-client-form`; `code-templates.md` перегенеровано з перезібраної й перевіреної копії
   (`next build`, `eslint`, 0 FAIL, потік з моком → `ready`, матриця 12/12, без `APP_BASE_URL` → `failed`).
+- `333a54b` — за рев'ю CodeRabbit: кожен FAIL друкується як `файл:рядок` (відсутні ключі `.env.example` — на його
+  останньому рядку); харнес самотесту тепер перевіряє цей формат у кожному прогоні.
 - Мутаційний самотест після всіх змін — 33/33, вивід на `main` — той самий, що вище (`diff` порожній).
 
 **`check-contract.mjs` на фінальному коді** (гілка після перенесення прогону B, доведення й виправлень за
