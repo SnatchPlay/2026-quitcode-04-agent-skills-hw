@@ -33,7 +33,8 @@ metadata:
    1. сесія — `await getCurrentUser()` (у публічної форми сесії немає — тоді крок пропускаємо свідомо й пишемо чому);
    2. права — ресурс належить workspace користувача (`lead.workspaceId === workspace.id`), інакше `throw`;
    3. валідація `FormData` — довжини, формати, значення зі списку; `FormData.get()` — завжди `unknown`.
-2. **Відповідь дії** — лише `{ status: "ok" }` / `{ status: "invalid", errors, values }` / `{ status: "error" }`.
+2. **Відповідь дії** — лише `{ status: "ok", id? }` / `{ status: "invalid", errors, values }` / `{ status: "error" }`
+   (або `redirect()` на сторінку створеного запису).
    Ніколи не рядок з бази й не весь об'єкт: усе повернене серіалізується в клієнт (`server-serialization`).
    `values` — лише те, що ввів користувач, щоб повернути його в поля.
 3. **Повільне — в `after()`**: листи, n8n, аудит, аналітика (`server-after-nonblocking`). Дія зберігає запис
@@ -46,7 +47,8 @@ metadata:
 7. **Введене не зникає**: React 19 скидає неконтрольовані поля після дії — тому `defaultValue={values?.x}`,
    а для `<select>` і чекбоксів ще `key={values?.x}`, бо змінений `defaultValue` після монтування не діє.
 8. **Id запису — прихованим полем**, не `action.bind(null, id)`: у Next.js 16.3.5 прив'язана дія в
-   `useActionState` без JavaScript не отримала відповіді (перевірено в цьому проєкті). Id з форми —
+   `useActionState` без JavaScript не отримала відповіді (перевірено в цьому проєкті: `curl -m 15` — timeout, з
+   прихованим полем — 200), хоча `forms.md` у документації Next.js стверджує, що `bind` підтримує прогресивне покращення. Id з форми —
    такий самий ненадійний ввід, тому права перевіряє дія (крок 1.2).
 
 ```tsx
@@ -69,9 +71,9 @@ export async function addNote(_prev: NoteState, formData: FormData): Promise<Not
   if (!lead || lead.workspaceId !== workspace.id) throw new Error("Lead not found");
 
   const raw = formData.get("text");
-  const text = typeof raw === "string" ? raw.trim() : "";
+  const text = typeof raw === "string" ? raw.replace(/\r\n/g, "\n").trim() : ""; // браузер шле CRLF
   if (text.length === 0 || text.length > 500) {
-    return { status: "invalid", errors: { text: "Від 1 до 500 символів" }, values: { text: text.slice(0, 500) } };
+    return { status: "invalid", errors: { text: "Від 1 до 500 символів" }, values: { text } };
   }
   await db.appendNote(leadId, text);
   after(() => logAudit("lead.note_added", leadId));
@@ -102,7 +104,7 @@ const values = state.status === "invalid" ? state.values : undefined;
 ```
 - [ ] 1. Дія перевіряє сесію і права до першого запису (або публічність записано явно).
 - [ ] 2. Валідація — у дії, на сервері; атрибути HTML (required, maxLength) — лише підказка.
-- [ ] 3. Дія повертає { status, errors?, values? } і нічого з бази.
+- [ ] 3. Дія повертає { status, id?, errors?, values? } (або redirect) і нічого з бази.
 - [ ] 4. Листи, n8n, аудит — в after(); дія не чекає зовнішніх сервісів.
 - [ ] 5. Жодного console.* з formData, email, телефоном, іменем чи тілом запиту.
 - [ ] 6. label/htmlFor, aria-invalid, aria-describedby, підсумок role="alert".
@@ -114,13 +116,13 @@ const values = state.status === "invalid" ? state.values : undefined;
 
 - дія має писати дані без сесії, а форма не публічна, або незрозуміло, хто має право на ресурс;
 - у відповідь дії чи в журнал треба покласти персональні дані;
-- користувач мусить дочекатися зовнішнього сервісу, щоб побачити результат (це асинхронний сценарій, не форма);
+- дія мусить синхронно дочекатися зовнішнього сервісу, щоб відповісти (результат замість цього показує сторінка статусу);
 - валідацію пропонують лише на клієнті.
 
 ## Verify — задача готова, лише коли:
 
 - [ ] `npm run lint` і `npm run build` без помилок.
-- [ ] Порожня відправка: помилка біля поля, `role="alert"` над формою, фокус і введене на місці.
+- [ ] Порожня відправка: помилка біля поля, `role="alert"` над формою, введене на місці.
 - [ ] Відправка з вимкненим JavaScript доходить до дії й показує результат.
 - [ ] Виклик дії без cookie сесії (прямий `POST` з заголовком `Next-Action`) нічого не змінює.
 - [ ] Журнал сервера після відправки: немає тексту полів, email, телефонів.
