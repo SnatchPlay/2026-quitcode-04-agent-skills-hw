@@ -456,8 +456,8 @@ function importedHelperSources(file) {
     for (const [f, t] of [[file, text], ...helpers.map((h) => [h.file, h.text])]) {
       t.split("\n").forEach((l, i) => {
         for (const m of l.matchAll(/[!=]==?/g)) {
-          const left = l.slice(0, m.index).split(/&&|\|\||\(|,|\breturn\b|\bif\b/).pop().trim();
-          const right = l.slice(m.index + m[0].length).split(/&&|\|\||\)\s*[;{]|;|,/)[0].trim();
+          const left = l.slice(0, m.index).split(/&&|\|\||\(|,|!(?!=)|\breturn\b|\bif\b/).pop().trim();
+          const right = l.slice(m.index + m[0].length).split(/&&|\|\||\)|;|,|\?/)[0].trim();
           if ([left, right].every((s) => /\.length$/.test(s))) continue;
           if ([left, right].some((s) => /signature|digest|hmac|expected|sha256=/i.test(s))) f8.push(at(f, i + 1, "signature compared with ===/!== instead of timingSafeEqual"));
         }
