@@ -21,7 +21,7 @@ export type TriggerOptions = {
 
 export type TriggerResult =
   | { ok: true; jobId: string | null; attempts: number }
-  | { ok: false; reason: "rejected" | "unexpected-response" | "unreachable"; status: number | null; attempts: number };
+  | { ok: false; reason: "misconfigured" | "rejected" | "unexpected-response" | "unreachable"; status: number | null; attempts: number };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -38,13 +38,23 @@ function logAttempt(options: TriggerOptions, attempt: number, startedAt: number,
 }
 
 export async function triggerWorkflow(options: TriggerOptions): Promise<TriggerResult> {
-  const url = `${env("N8N_WEBHOOK_BASE_URL")}/${options.event}`;
-  const envelope = JSON.stringify({
-    version: 1,
-    event: options.event,
-    data: options.data,
-    ...(options.async ? { callbackUrl: `${env("APP_BASE_URL")}/api/n8n/${options.event}` } : {}),
-  });
+  let url: string;
+  let token: string;
+  let envelope: string;
+  try {
+    url = `${env("N8N_WEBHOOK_BASE_URL")}/${options.event}`;
+    token = env("N8N_WEBHOOK_TOKEN");
+    envelope = JSON.stringify({
+      version: 1,
+      event: options.event,
+      data: options.data,
+      ...(options.async ? { callbackUrl: `${env("APP_BASE_URL")}/api/n8n/${options.event}` } : {}),
+    });
+  } catch (error) {
+    // A missing variable is a deploy error, not an outage: no retries, the caller marks the record failed.
+    console.error(`n8n out event=${options.event} correlation=${options.correlationId} misconfigured`, error instanceof Error ? error.message : "error");
+    return { ok: false, reason: "misconfigured", status: null, attempts: 0 };
+  }
   const maxAttempts = RETRY_DELAYS_MS.length + 1;
   let lastStatus: number | null = null;
 
@@ -55,7 +65,7 @@ export async function triggerWorkflow(options: TriggerOptions): Promise<TriggerR
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-n8n-token": env("N8N_WEBHOOK_TOKEN"),
+          "x-n8n-token": token,
           "idempotency-key": options.idempotencyKey,
           "x-correlation-id": options.correlationId,
         },
