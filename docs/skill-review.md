@@ -117,7 +117,9 @@ Claude Code автоматично підвантажив `CLAUDE.md` того �
   проєктом. Його опис радить агенту шукати й ставити скіли через `npx skills add`, що суперечить розділу
   безпеки `AGENTS.md`. `claude -p "/context"` у проєкті показує його як `find-skills | User`. У git він
   не потрапив, але видно його в кожній сесії на цій машині, і він забруднив би обидві гілки A/B (Task D).
-  Висновок: на запитання CLI про `find-skills` відповідати «ні».
+  Висновок: на запитання CLI про `find-skills` відповідати «ні». Після рев'ю `find-skills` видалено
+  (`~/.claude/skills/find-skills` і запис у `~/.agents/.skill-lock.json`; відмітку
+  `dismissed.findSkillsPrompt: true` лишили, щоб CLI не пропонував його знову).
 - Як оновлювати: та сама команда з новим тегом → `git diff .claude/skills/vercel-react-best-practices skills-lock.json`
   → рев'ю змін за цим чеклістом (нові скрипти, `allowed-tools`, посилання, приховані інструкції) → окремий
   коміт. Файли скіла вручну не редагуємо.

@@ -1,0 +1,621 @@
+diff --git a/.env.example b/.env.example
+index 26590dc..301f8b7 100644
+--- a/.env.example
++++ b/.env.example
+@@ -4,3 +4,14 @@
+ # n8n webhook that receives every new lead from the public form.
+ # Locally it points at the offline n8n mock: node tools/mock-n8n.mjs
+ N8N_WEBHOOK_URL=http://127.0.0.1:5678/webhook-test/lead-created
++
++# n8n webhook that starts the "quote-request" workflow (builds a PDF quote, takes 40-90s).
++N8N_QUOTE_WEBHOOK_URL=http://127.0.0.1:5678/webhook-test/quote-request
++
++# Shared secret the app sends to n8n and expects back on the completion callback
++# (POST /api/quotes/[id]/complete, header "x-webhook-secret"). Set it to the same
++# value in the n8n workflow.
++N8N_CALLBACK_SECRET=change-me
++
++# Base URL of this app, used to build the callback URL passed to n8n.
++APP_URL=http://localhost:3000
+diff --git a/app/api/quotes/[id]/complete/route.ts b/app/api/quotes/[id]/complete/route.ts
+new file mode 100644
+index 0000000..684dc82
+--- /dev/null
++++ b/app/api/quotes/[id]/complete/route.ts
+@@ -0,0 +1,36 @@
++import { timingSafeEqual } from "node:crypto";
++import { db } from "@/lib/db";
++
++function secretsMatch(provided: string, expected: string) {
++  const providedBuf = Buffer.from(provided);
++  const expectedBuf = Buffer.from(expected);
++  return providedBuf.length === expectedBuf.length && timingSafeEqual(providedBuf, expectedBuf);
++}
++
++export async function POST(request: Request, { params }: RouteContext<"/api/quotes/[id]/complete">) {
++  const secret = process.env.N8N_CALLBACK_SECRET;
++  const provided = request.headers.get("x-webhook-secret");
++  if (!secret || !provided || !secretsMatch(provided, secret)) {
++    return Response.json({ error: "unauthorized" }, { status: 401 });
++  }
++
++  const { id } = await params;
++  const quote = await db.getQuoteRequest(id);
++  if (!quote) {
++    return Response.json({ error: "quote not found" }, { status: 404 });
++  }
++
++  const body = await request.json().catch(() => null);
++  const pdfUrl = body && typeof body.pdfUrl === "string" ? body.pdfUrl : "";
++  const error = body && typeof body.error === "string" ? body.error : "";
++
++  if (pdfUrl) {
++    await db.completeQuoteRequest(id, pdfUrl);
++  } else if (error) {
++    await db.failQuoteRequest(id, error);
++  } else {
++    return Response.json({ error: "expected pdfUrl or error" }, { status: 400 });
++  }
++
++  return Response.json({ ok: true });
++}
+diff --git a/app/page.tsx b/app/page.tsx
+index 65a494b..1855c2d 100644
+--- a/app/page.tsx
++++ b/app/page.tsx
+@@ -25,6 +25,9 @@ export default function Home() {
+             <li>• Кошторис за 2 робочі дні</li>
+             <li>• Працюємо з Україною та ЄС</li>
+           </ul>
++          <Link href="/quotes/new" className="inline-block text-sm font-medium text-indigo-600 hover:text-indigo-700">
++            Потрібен кошторис на конкретну задачу? →
++          </Link>
+         </section>
+ 
+         <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+diff --git a/app/quotes/[id]/page.tsx b/app/quotes/[id]/page.tsx
+new file mode 100644
+index 0000000..a0d98fd
+--- /dev/null
++++ b/app/quotes/[id]/page.tsx
+@@ -0,0 +1,65 @@
++import Link from "next/link";
++import { notFound } from "next/navigation";
++import { QuoteStatusPoller } from "@/components/quote-status-poller";
++import { db } from "@/lib/db";
++
++export const dynamic = "force-dynamic";
++
++const dateTimeFormat = new Intl.DateTimeFormat("uk-UA", { dateStyle: "medium", timeStyle: "short" });
++
++export default async function QuoteStatusPage({ params }: PageProps<"/quotes/[id]">) {
++  const { id } = await params;
++  const quote = await db.getQuoteRequest(id);
++  if (!quote) notFound();
++
++  return (
++    <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-6 py-12">
++      <Link href="/quotes/new" className="text-sm text-slate-500 hover:text-slate-900">
++        ← Новий запит
++      </Link>
++
++      <div className="mt-6 space-y-6 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
++        <div>
++          <h1 className="text-2xl font-semibold tracking-tight">Кошторис {quote.id}</h1>
++          <p className="text-sm text-slate-500">
++            {quote.company} · {quote.email}
++          </p>
++        </div>
++
++        {quote.status === "pending" && (
++          <div className="space-y-2">
++            <p className="text-slate-700">Готуємо кошторис. Це зазвичай займає 1–2 хвилини.</p>
++            <p className="text-xs text-slate-500">
++              Запит створено {dateTimeFormat.format(new Date(quote.createdAt))}
++            </p>
++            <QuoteStatusPoller />
++          </div>
++        )}
++
++        {quote.status === "ready" && quote.pdfUrl && (
++          <div className="space-y-3">
++            <p className="text-slate-700">Кошторис готовий.</p>
++            <a
++              href={quote.pdfUrl}
++              target="_blank"
++              rel="noreferrer"
++              className="inline-block rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
++            >
++              Завантажити PDF
++            </a>
++          </div>
++        )}
++
++        {quote.status === "failed" && (
++          <div className="space-y-2">
++            <p className="text-red-700">Не вдалося підготувати кошторис.</p>
++            {quote.error && <p className="text-sm text-slate-500">{quote.error}</p>}
++            <Link href="/quotes/new" className="text-sm text-indigo-600 hover:text-indigo-700">
++              Спробувати ще раз
++            </Link>
++          </div>
++        )}
++      </div>
++    </div>
++  );
++}
+diff --git a/app/quotes/actions.ts b/app/quotes/actions.ts
+new file mode 100644
+index 0000000..7f5753a
+--- /dev/null
++++ b/app/quotes/actions.ts
+@@ -0,0 +1,47 @@
++"use server";
++
++import { redirect } from "next/navigation";
++import { after } from "next/server";
++import { db } from "@/lib/db";
++import { parseQuoteForm, type QuoteFormData, type QuoteFormField } from "@/lib/quote-form";
++
++export type RequestQuoteState =
++  | { status: "idle" }
++  | { status: "invalid"; errors: Partial<Record<QuoteFormField, string>> };
++
++export async function requestQuote(
++  _prevState: RequestQuoteState,
++  formData: FormData,
++): Promise<RequestQuoteState> {
++  const parsed = parseQuoteForm(formData);
++  if (!parsed.ok) {
++    return { status: "invalid", errors: parsed.errors };
++  }
++
++  const quote = await db.insertQuoteRequest(parsed.data);
++
++  after(() => triggerQuoteWorkflow(quote.id, parsed.data));
++
++  redirect(`/quotes/${quote.id}`);
++}
++
++async function triggerQuoteWorkflow(quoteId: string, data: QuoteFormData) {
++  try {
++    const response = await fetch(process.env.N8N_QUOTE_WEBHOOK_URL!, {
++      method: "POST",
++      headers: { "content-type": "application/json" },
++      body: JSON.stringify({
++        quoteId,
++        ...data,
++        callbackUrl: `${process.env.APP_URL}/api/quotes/${quoteId}/complete`,
++        callbackSecret: process.env.N8N_CALLBACK_SECRET,
++      }),
++    });
++    if (!response.ok) {
++      throw new Error(`n8n responded with ${response.status}`);
++    }
++  } catch (error) {
++    console.error(`Failed to start quote workflow for ${quoteId}`, error);
++    await db.failQuoteRequest(quoteId, "Не вдалося запустити формування кошторису");
++  }
++}
+diff --git a/app/quotes/new/page.tsx b/app/quotes/new/page.tsx
+new file mode 100644
+index 0000000..c4fce74
+--- /dev/null
++++ b/app/quotes/new/page.tsx
+@@ -0,0 +1,30 @@
++import Link from "next/link";
++import { QuoteForm } from "@/components/quote-form";
++
++export default function NewQuotePage() {
++  return (
++    <div className="flex flex-1 flex-col">
++      <header className="border-b border-slate-200 bg-white">
++        <div className="mx-auto flex max-w-3xl items-center justify-between px-6 py-4">
++          <span className="text-lg font-semibold tracking-tight">Studio Nova</span>
++          <Link href="/" className="text-sm text-slate-500 hover:text-slate-900">
++            ← Заявка на проєкт
++          </Link>
++        </div>
++      </header>
++
++      <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-12">
++        <div className="mb-8 space-y-2">
++          <h1 className="text-3xl font-semibold tracking-tight">Запит на кошторис</h1>
++          <p className="text-slate-600">
++            Опишіть задачу — підготуємо орієнтовний кошторис у форматі PDF протягом кількох хвилин.
++          </p>
++        </div>
++
++        <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
++          <QuoteForm />
++        </div>
++      </main>
++    </div>
++  );
++}
+diff --git a/components/form-styles.ts b/components/form-styles.ts
+new file mode 100644
+index 0000000..3292ba0
+--- /dev/null
++++ b/components/form-styles.ts
+@@ -0,0 +1,2 @@
++export const inputClass =
++  "mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500";
+diff --git a/components/lead-form.tsx b/components/lead-form.tsx
+index 8377a16..c0fd392 100644
+--- a/components/lead-form.tsx
++++ b/components/lead-form.tsx
+@@ -2,13 +2,11 @@
+ 
+ import { useActionState } from "react";
+ import { submitLead, type SubmitLeadState } from "@/app/actions";
+-import { BUDGET_OPTIONS } from "@/lib/lead-form";
++import { inputClass } from "@/components/form-styles";
++import { BUDGET_OPTIONS } from "@/lib/budget";
+ 
+ const initialState: SubmitLeadState = { status: "idle" };
+ 
+-const inputClass =
+-  "mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500";
+-
+ export function LeadForm() {
+   const [state, formAction, pending] = useActionState(submitLead, initialState);
+   const errors = state.status === "invalid" ? state.errors : {};
+diff --git a/components/quote-form.tsx b/components/quote-form.tsx
+new file mode 100644
+index 0000000..81e5418
+--- /dev/null
++++ b/components/quote-form.tsx
+@@ -0,0 +1,57 @@
++"use client";
++
++import { useActionState } from "react";
++import { requestQuote, type RequestQuoteState } from "@/app/quotes/actions";
++import { inputClass } from "@/components/form-styles";
++import { BUDGET_OPTIONS } from "@/lib/budget";
++
++const initialState: RequestQuoteState = { status: "idle" };
++
++export function QuoteForm() {
++  const [state, formAction, pending] = useActionState(requestQuote, initialState);
++  const errors = state.status === "invalid" ? state.errors : {};
++
++  return (
++    <form action={formAction} className="space-y-4" noValidate>
++      <label className="block text-sm font-medium">
++        Компанія
++        <input name="company" autoComplete="organization" className={inputClass} />
++        {errors.company && <span className="mt-1 block text-xs text-red-600">{errors.company}</span>}
++      </label>
++
++      <label className="block text-sm font-medium">
++        Email
++        <input name="email" type="email" autoComplete="email" className={inputClass} />
++        {errors.email && <span className="mt-1 block text-xs text-red-600">{errors.email}</span>}
++      </label>
++
++      <label className="block text-sm font-medium">
++        Бюджет
++        <select name="budget" defaultValue="" className={inputClass}>
++          {BUDGET_OPTIONS.map((option) => (
++            <option key={option.value} value={option.value}>
++              {option.label}
++            </option>
++          ))}
++        </select>
++        {errors.budget && <span className="mt-1 block text-xs text-red-600">{errors.budget}</span>}
++      </label>
++
++      <label className="block text-sm font-medium">
++        Опис задачі
++        <textarea name="taskDescription" rows={5} className={inputClass} />
++        {errors.taskDescription && (
++          <span className="mt-1 block text-xs text-red-600">{errors.taskDescription}</span>
++        )}
++      </label>
++
++      <button
++        type="submit"
++        disabled={pending}
++        className="w-full rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
++      >
++        {pending ? "Надсилаємо…" : "Отримати кошторис"}
++      </button>
++    </form>
++  );
++}
+diff --git a/components/quote-status-poller.tsx b/components/quote-status-poller.tsx
+new file mode 100644
+index 0000000..7884729
+--- /dev/null
++++ b/components/quote-status-poller.tsx
+@@ -0,0 +1,17 @@
++"use client";
++
++import { useRouter } from "next/navigation";
++import { useEffect } from "react";
++
++const POLL_INTERVAL_MS = 4000;
++
++export function QuoteStatusPoller() {
++  const router = useRouter();
++
++  useEffect(() => {
++    const timer = setInterval(() => router.refresh(), POLL_INTERVAL_MS);
++    return () => clearInterval(timer);
++  }, [router]);
++
++  return null;
++}
+diff --git a/lib/budget.ts b/lib/budget.ts
+new file mode 100644
+index 0000000..51ec379
+--- /dev/null
++++ b/lib/budget.ts
+@@ -0,0 +1,7 @@
++export const BUDGET_OPTIONS = [
++  { value: "", label: "Ще не визначились" },
++  { value: "500", label: "до $500 / міс." },
++  { value: "1500", label: "$500–1500 / міс." },
++  { value: "5000", label: "$1500–5000 / міс." },
++  { value: "10000", label: "понад $5000 / міс." },
++] as const;
+diff --git a/lib/db.ts b/lib/db.ts
+index 42d9f80..9948a45 100644
+--- a/lib/db.ts
++++ b/lib/db.ts
+@@ -5,6 +5,8 @@ import type {
+   LeadStats,
+   LeadStatus,
+   NewLead,
++  NewQuoteRequest,
++  QuoteRequest,
+   SourceCount,
+   User,
+   Workspace,
+@@ -20,6 +22,8 @@ type Store = {
+   leads: Lead[];
+   audit: AuditEntry[];
+   nextLeadNumber: number;
++  quoteRequests: QuoteRequest[];
++  nextQuoteNumber: number;
+ };
+ 
+ const LATENCY_MS = {
+@@ -36,6 +40,10 @@ const LATENCY_MS = {
+   insertAuditEntry: 250,
+   listUsers: 50,
+   createSession: 50,
++  insertQuoteRequest: 120,
++  getQuoteRequest: 80,
++  completeQuoteRequest: 80,
++  failQuoteRequest: 80,
+ } as const;
+ 
+ type QueryName = keyof typeof LATENCY_MS;
+@@ -162,6 +170,10 @@ function leadId(n: number) {
+   return `lead_${String(n).padStart(4, "0")}`;
+ }
+ 
++function quoteId(n: number) {
++  return `quote_${String(n).padStart(4, "0")}`;
++}
++
+ function seedLeads(count: number, workspaces: Workspace[], users: User[]): Lead[] {
+   const random = mulberry32(20260921);
+   const pick = <T,>(items: readonly T[]) => items[Math.floor(random() * items.length)];
+@@ -262,7 +274,15 @@ function createStore(): Store {
+     { id: "u_marta", name: "Marta Novak", email: "marta@brightline.example.test", role: "manager", workspaceSlug: "brightline" },
+   ];
+   const leads = seedLeads(200, workspaces, users);
+-  return { workspaces, users, leads, audit: [], nextLeadNumber: leads.length + 1 };
++  return {
++    workspaces,
++    users,
++    leads,
++    audit: [],
++    nextLeadNumber: leads.length + 1,
++    quoteRequests: [],
++    nextQuoteNumber: 1,
++  };
+ }
+ 
+ // One store per server process (also survives module reloads in `next dev`).
+@@ -394,4 +414,50 @@ export const db = {
+       store.audit.push(entry);
+     });
+   },
++
++  insertQuoteRequest(input: NewQuoteRequest) {
++    return query("insertQuoteRequest", (): QuoteRequest => {
++      const now = new Date().toISOString();
++      const quote: QuoteRequest = {
++        ...input,
++        id: quoteId(store.nextQuoteNumber++),
++        status: "pending",
++        pdfUrl: null,
++        error: null,
++        createdAt: now,
++        updatedAt: now,
++      };
++      store.quoteRequests.push(quote);
++      return structuredClone(quote);
++    });
++  },
++
++  getQuoteRequest(id: string) {
++    return query("getQuoteRequest", () => {
++      const quote = store.quoteRequests.find((q) => q.id === id);
++      return quote ? structuredClone(quote) : null;
++    });
++  },
++
++  completeQuoteRequest(id: string, pdfUrl: string) {
++    return query("completeQuoteRequest", () => {
++      const quote = store.quoteRequests.find((q) => q.id === id);
++      if (!quote || quote.status !== "pending") return false;
++      quote.status = "ready";
++      quote.pdfUrl = pdfUrl;
++      quote.updatedAt = new Date().toISOString();
++      return true;
++    });
++  },
++
++  failQuoteRequest(id: string, error: string) {
++    return query("failQuoteRequest", () => {
++      const quote = store.quoteRequests.find((q) => q.id === id);
++      if (!quote || quote.status !== "pending") return false;
++      quote.status = "failed";
++      quote.error = error;
++      quote.updatedAt = new Date().toISOString();
++      return true;
++    });
++  },
+ };
+diff --git a/lib/lead-form.ts b/lib/lead-form.ts
+index e74633b..86721ca 100644
+--- a/lib/lead-form.ts
++++ b/lib/lead-form.ts
+@@ -1,10 +1,5 @@
+-export const BUDGET_OPTIONS = [
+-  { value: "", label: "Ще не визначились" },
+-  { value: "500", label: "до $500 / міс." },
+-  { value: "1500", label: "$500–1500 / міс." },
+-  { value: "5000", label: "$1500–5000 / міс." },
+-  { value: "10000", label: "понад $5000 / міс." },
+-] as const;
++import { BUDGET_OPTIONS } from "./budget";
++import { EMAIL_RE, formText } from "./validation";
+ 
+ export type LeadFormField =
+   | "firstName"
+@@ -33,24 +28,18 @@ export type ParseResult =
+   | { ok: true; data: LeadFormData }
+   | { ok: false; errors: Partial<Record<LeadFormField, string>> };
+ 
+-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+ const PHONE_RE = /^\+?[0-9 ()-]{7,20}$/;
+ 
+-function text(formData: FormData, name: LeadFormField, max = 200) {
+-  const value = formData.get(name);
+-  return typeof value === "string" ? value.trim().slice(0, max) : "";
+-}
+-
+ export function parseLeadForm(formData: FormData): ParseResult {
+   const data: LeadFormData = {
+-    firstName: text(formData, "firstName", 80),
+-    lastName: text(formData, "lastName", 80),
+-    email: text(formData, "email", 200).toLowerCase(),
+-    phone: text(formData, "phone", 20),
+-    company: text(formData, "company", 120),
+-    website: text(formData, "website", 200),
++    firstName: formText(formData, "firstName", 80),
++    lastName: formText(formData, "lastName", 80),
++    email: formText(formData, "email", 200).toLowerCase(),
++    phone: formText(formData, "phone", 20),
++    company: formText(formData, "company", 120),
++    website: formText(formData, "website", 200),
+     budget: null,
+-    message: text(formData, "message", 2000),
++    message: formText(formData, "message", 2000),
+     consentMarketing: formData.get("consentMarketing") === "on",
+   };
+ 
+@@ -62,7 +51,7 @@ export function parseLeadForm(formData: FormData): ParseResult {
+   if (data.phone && !PHONE_RE.test(data.phone)) errors.phone = "Перевірте номер телефону";
+   if (data.message.length < 10) errors.message = "Опишіть задачу хоча б одним реченням";
+ 
+-  const budget = text(formData, "budget", 10);
++  const budget = formText(formData, "budget", 10);
+   if (budget) {
+     if (!BUDGET_OPTIONS.some((option) => option.value === budget)) {
+       errors.budget = "Оберіть бюджет зі списку";
+diff --git a/lib/quote-form.ts b/lib/quote-form.ts
+new file mode 100644
+index 0000000..a511b5d
+--- /dev/null
++++ b/lib/quote-form.ts
+@@ -0,0 +1,41 @@
++import { BUDGET_OPTIONS } from "./budget";
++import { EMAIL_RE, formText } from "./validation";
++
++export type QuoteFormField = "company" | "email" | "taskDescription" | "budget";
++
++export type QuoteFormData = {
++  company: string;
++  email: string;
++  taskDescription: string;
++  budget: number | null;
++};
++
++export type ParseResult =
++  | { ok: true; data: QuoteFormData }
++  | { ok: false; errors: Partial<Record<QuoteFormField, string>> };
++
++export function parseQuoteForm(formData: FormData): ParseResult {
++  const data: QuoteFormData = {
++    company: formText(formData, "company", 120),
++    email: formText(formData, "email", 200).toLowerCase(),
++    taskDescription: formText(formData, "taskDescription", 4000),
++    budget: null,
++  };
++
++  const errors: Partial<Record<QuoteFormField, string>> = {};
++
++  if (!data.company) errors.company = "Вкажіть компанію";
++  if (!EMAIL_RE.test(data.email)) errors.email = "Перевірте email";
++  if (data.taskDescription.length < 10) errors.taskDescription = "Опишіть задачу хоча б одним реченням";
++
++  const budget = formText(formData, "budget", 10);
++  if (budget) {
++    if (!BUDGET_OPTIONS.some((option) => option.value === budget)) {
++      errors.budget = "Оберіть бюджет зі списку";
++    } else {
++      data.budget = Number(budget);
++    }
++  }
++
++  return Object.keys(errors).length > 0 ? { ok: false, errors } : { ok: true, data };
++}
+diff --git a/lib/types.ts b/lib/types.ts
+index aa158e6..a46db59 100644
+--- a/lib/types.ts
++++ b/lib/types.ts
+@@ -100,3 +100,25 @@ export type AuditEntry = {
+   leadId: string;
+   at: string;
+ };
++
++export const QUOTE_STATUSES = ["pending", "ready", "failed"] as const;
++
++export type QuoteStatus = (typeof QUOTE_STATUSES)[number];
++
++export type QuoteRequest = {
++  id: string;
++  company: string;
++  email: string;
++  taskDescription: string;
++  budget: number | null;
++  status: QuoteStatus;
++  pdfUrl: string | null;
++  error: string | null;
++  createdAt: string;
++  updatedAt: string;
++};
++
++export type NewQuoteRequest = Omit<
++  QuoteRequest,
++  "id" | "status" | "pdfUrl" | "error" | "createdAt" | "updatedAt"
++>;
+diff --git a/lib/validation.ts b/lib/validation.ts
+new file mode 100644
+index 0000000..20c5a97
+--- /dev/null
++++ b/lib/validation.ts
+@@ -0,0 +1,6 @@
++export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
++
++export function formText(formData: FormData, name: string, max = 200) {
++  const value = formData.get(name);
++  return typeof value === "string" ? value.trim().slice(0, max) : "";
++}

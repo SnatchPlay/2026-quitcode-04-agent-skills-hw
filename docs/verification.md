@@ -16,7 +16,7 @@
 | `building-client-form` | Project | після коміту `eb74387`; видно в `/context` з `--setting-sources project,local` |
 | `integrating-n8n-webhooks` | Project | після коміту `e8857a4`; перевірка видимості в копіях A/B — `docs/ab-validation.md` |
 
-- Особисті скіли, які теж видно: `code-craft`, `find-skills`, `no-mistakes` (User) і скіли `anthropic-skills:*`
+- Особисті скіли, які теж видно: `code-craft`, `find-skills` (згодом видалено), `no-mistakes` (User) і скіли `anthropic-skills:*`
   (claude.ai sync), а також `~/.claude/CLAUDE.md` у Memory files. `find-skills` поставив сам CLI `skills`
   під час Task A (див. `docs/skill-review.md`, розділ 6). На рев'ю в Task A вони не вплинули: у журналі тієї
   сесії викликано лише `vercel-react-best-practices`. Для A/B (Task D) їх прибирає `--setting-sources`.
@@ -258,4 +258,38 @@ all cases as expected
 потрібен вихідний `idempotency-key` запису, а він зберігається лише в пам'яті сервера. Успішний шлях
 (підписаний колбек для існуючого запису → 202) перевірено наскрізним прогоном з моком вище.
 
-**`check-contract.mjs` на фінальному коді** (після перенесення прогону B) — у кінці `docs/ab-validation.md`.
+**Що скіл змінив у собі після прогонів Task D** (кожне — окремим комітом, деталі — `docs/ab-validation.md`):
+
+- `80397fa` — C6: `fetch` у неекспортованому хелпері, який Server Action викликає лише в `after()`, давав
+  хибний FAIL (прогін A2). Тепер C6 перевіряє місця виклику такого хелпера; у самотест додано дві мутації
+  («хелпер лише в `after()`» → PASS, «той самий хелпер з `await`» → FAIL).
+- `ca5b1ee` — `check-contract.mjs` без 5 попереджень `no-unused-expressions` у `npm run lint`.
+- `54ceb41` — C8: порівняння довжин `a.length !== b.length) return false` більше не вважається порівнянням
+  підпису (хибний FAIL у прогоні A3).
+- Після всіх трьох: мутаційний самотест — 25/25 (`all mutations caught, clean copy passes`), вивід на `main` —
+  той самий, що вище (`diff` порожній).
+
+**`check-contract.mjs` на фінальному коді** (гілка після перенесення прогону B і доведення, увесь код, без
+`--changed-since`), exit 0:
+
+```
+check-contract · root /Users/andrii/D/Work/Agentic Development Course/2026-quitcode-04-agent-skills-hw · 36 file(s)
+C1   PASS no n8n test URL (/webhook-test/)
+C2   PASS no NEXT_PUBLIC_N8N_* variables
+C3   PASS n8n calls only in lib/n8n/client.ts (server-only)
+C4   PASS timeout on every n8n fetch
+C5   PASS x-n8n-token, idempotency-key, x-correlation-id on every n8n fetch
+C6   PASS Server Actions call n8n only inside after()
+C7   PASS callback: raw body, JSON only after signature check
+C8   PASS callback: length check + timingSafeEqual, no ===
+C9   PASS callback: +-300 s timestamp window
+C10  PASS callback: 64 KB limit -> 413
+C11  PASS no runtime = "edge"
+C12  PASS .env.example and N8N_* names follow the contract
+C13  PASS no bodies, PII or secrets in logs
+Summary: 13 PASS, 0 FAIL, 0 N/A
+```
+
+**Матриця колбеків на фінальному коді** (`node --env-file=.env.local …/send-signed-callback.mjs --url
+http://127.0.0.1:3000/api/n8n/quote-request`, продакшн-збірка гілки): 11/11 як очікувано — ті самі коди, що й
+на шаблоні вище.
