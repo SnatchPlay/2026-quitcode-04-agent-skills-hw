@@ -19,6 +19,8 @@ export const LEAD_SOURCES = [
 
 export type LeadSource = (typeof LEAD_SOURCES)[number];
 
+export const NOTE_MAX_LENGTH = 500;
+
 export type Lead = {
   id: string;
   workspaceId: string;

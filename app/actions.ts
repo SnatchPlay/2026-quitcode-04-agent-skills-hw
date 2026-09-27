@@ -1,12 +1,13 @@
 "use server";
 
 import { headers } from "next/headers";
+import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 import { getCurrentUser, getLead, getWorkspace } from "@/lib/data";
 import { parseLeadForm, type LeadFormField } from "@/lib/lead-form";
-import { LEAD_STATUSES, type LeadStatus } from "@/lib/types";
+import { LEAD_STATUSES, NOTE_MAX_LENGTH, type LeadStatus } from "@/lib/types";
 
 const PUBLIC_FORM_WORKSPACE_ID = "ws_studio_nova";
 
@@ -82,6 +83,33 @@ export async function updateLeadStatus(id: string, status: LeadStatus) {
   await db.updateLeadStatus(id, status);
   revalidatePath("/dashboard");
   revalidatePath(`/dashboard/leads/${id}`);
+}
+
+export type AddNoteState =
+  | { status: "idle" | "ok" }
+  | { status: "invalid"; errors: { text?: string }; values: { text: string } };
+
+export async function addNote(
+  id: string,
+  _prevState: AddNoteState,
+  formData: FormData,
+): Promise<AddNoteState> {
+  await requireLeadInUserWorkspace(id);
+
+  const raw = formData.get("text");
+  const text = typeof raw === "string" ? raw.trim() : "";
+  if (text.length === 0 || text.length > NOTE_MAX_LENGTH) {
+    return {
+      status: "invalid",
+      errors: { text: `Від 1 до ${NOTE_MAX_LENGTH} символів` },
+      values: { text: text.slice(0, NOTE_MAX_LENGTH) },
+    };
+  }
+
+  await db.appendNote(id, text);
+  revalidatePath(`/dashboard/leads/${id}`);
+  after(() => logAudit("lead.note_added", id));
+  return { status: "ok" };
 }
 
 export async function deleteLead(id: string) {
