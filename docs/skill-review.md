@@ -85,7 +85,17 @@ Claude Code автоматично підвантажив `CLAUDE.md` того �
 
 ## 5. Чи правдивий зміст для нашого стеку
 
-_Дописується після Task A, крок 5: поради, які звіряли з `node_modules/next/dist/docs/` (Next.js 16.3.5)._
+Звіряли з `node_modules/next/dist/docs/` (Next.js 16.3.5), шлях — від цієї теки. Поради взято з рев'ю
+застосунку, яке зробила свіжа сесія зі скілом (17 знахідок; `docs/verification.md`, Task A).
+
+| Порада скіла (id) | Що каже скіл | Що каже документація нашої версії | Висновок |
+|---|---|---|---|
+| `async-parallel` | незалежні `await` → `Promise.all` | `01-app/01-getting-started/06-fetching-data.md:462-468` — послідовні `await` в одному компоненті блокують один одного; `:476` — «await them with `Promise.all`» | застосовано (`app/dashboard/page.tsx`), виміряно |
+| `server-cache-react` | `React.cache()` для дедуплікації в межах запиту | `06-fetching-data.md:602-604` — мемоізація за тими самими аргументами, лише в межах одного запиту; автоматично мемоізується лише `fetch` (`04-functions/fetch.md:88`), а наша «база» — не `fetch` | застосовано; в нашому коді порада мала підступ: `getWorkspace` уже був у `cache()`, але з аргументом-об'єктом `{ slug }`, тож кеш ніколи не влучав — треба було змінити сигнатуру на рядок |
+| `server-auth-actions` | Server Action — публічний ендпоінт, перевіряй сесію всередині | `01-app/02-guides/data-security.md:291` — «treat Server Actions as reachable via direct POST requests»; `:339`, `:368` — перевірка на рівні сторінки не поширюється на дії | застосовано; до виправлення анонімний POST з `Next-Action` видалив лід — `proxy.ts` цього не зупиняє |
+| `bundle-dynamic-imports` | `next/dynamic` для важких компонентів | `01-app/02-guides/lazy-loading.md:66,94-95` — `ssr: false` працює лише в Client Components; у Server Component це помилка збірки | застосовано саме в `components/leads-toolbar.tsx` (`"use client"`). У `app/dashboard/page.tsx` (Server Component) та сама порада зламала б збірку |
+| `bundle-barrel-imports` (`lodash`) | імпортувати напряму, не з барел-файлу | `02-pages/…/optimizePackageImports.md` і `01-app/03-api-reference/05-config/01-next-config-js/optimizePackageImports.md:21-25` — у дефолтному списку є `lodash-es`, **немає** `lodash` | порада для нашого `import { debounce } from "lodash"` правдива; у Task A не застосовували (див. «що не застосували» у `docs/verification.md`) |
+| `server-after-nonblocking` | повільні побічні ефекти — в `after()` | `01-app/03-api-reference/04-functions/after.md:8` — працює в Server Functions і Route Handlers | правдива; для `submitLead` свідомо відкладено до Task D (виклик n8n переробляємо за контрактом скіла, інакше BASE для A/B отримав би частину контракту заздалегідь) |
 
 ## 6. Закріплення версії й коміт
 
@@ -95,9 +105,19 @@ _Дописується після Task A, крок 5: поради, які зв
   npx skills@1.7.0 add vercel-labs/agent-skills#agent-skills-063bee94c3f4df8453406c830b0a7df0f2860278 \
     --skill vercel-react-best-practices -a claude-code --copy
   ```
-- Де мають лягти файли: `.claude/skills/vercel-react-best-practices/` — справжні файли (`--copy`), без
-  `.agents/skills/` (лише `-a claude-code`: Cursor і так читає `.claude/skills/`).
-- Що потрапить у git: тека скіла (75 файлів) і `skills-lock.json` з `source`, тегом і хешем.
+- Де лягли файли (перевірено після встановлення): `.claude/skills/vercel-react-best-practices/` — 75
+  справжніх файлів (`find … -type f | wc -l` → 75, `find .claude/skills -type l` → порожньо);
+  `diff -r` з переглянутим клоном тега — єдина відмінність `Only in …: metadata.json`, тобто встановлено
+  рівно те, що рев'ювали. `.agents/` у проєкті немає.
+- Що потрапило в git (коміт `d5aad7a`): тека скіла і `skills-lock.json` з `"source": "vercel-labs/agent-skills"`,
+  `"ref": "agent-skills-063bee94c3f4df8453406c830b0a7df0f2860278"`, `"computedHash": "3219a194…"`.
+- **Побічний ефект CLI, якого немає в документації walkthrough:** під час встановлення `skills@1.7.0`
+  запропонував і поставив **глобальний** особистий скіл `find-skills` (`vercel-labs/skills`) у
+  `~/.claude/skills/find-skills/` з записом у `~/.agents/.skill-lock.json` — без тега, без рев'ю, поза
+  проєктом. Його опис радить агенту шукати й ставити скіли через `npx skills add`, що суперечить розділу
+  безпеки `AGENTS.md`. `claude -p "/context"` у проєкті показує його як `find-skills | User`. У git він
+  не потрапив, але видно його в кожній сесії на цій машині, і він забруднив би обидві гілки A/B (Task D).
+  Висновок: на запитання CLI про `find-skills` відповідати «ні».
 - Як оновлювати: та сама команда з новим тегом → `git diff .claude/skills/vercel-react-best-practices skills-lock.json`
   → рев'ю змін за цим чеклістом (нові скрипти, `allowed-tools`, посилання, приховані інструкції) → окремий
   коміт. Файли скіла вручну не редагуємо.
