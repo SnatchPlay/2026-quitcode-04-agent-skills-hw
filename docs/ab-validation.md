@@ -17,7 +17,8 @@
   `find … -name SKILL.md` — рівно 3 рядки, усі в `leaddesk-ab-b*`; `ls -A … | grep -xE 'tools|materials|…'` →
   «no hints - ok»; `grep -rlE "x-n8n-token|timingSafeEqual|idempotency-key"` по A-копіях → «no contract - ok»
 - **Особисті скіли й налаштування.** На машині є особисті скіли (`~/.claude/skills`: `code-craft`,
-  `no-mistakes`, `self-review`, `synced`) і особистий allowlist (зокрема `git push`). Тому всі прогони — з
+  `no-mistakes`, `self-review` — зламаний symlink, `synced` — тека синхронізації; у звичайному `/context` видно
+  `code-craft` і `no-mistakes`) і особистий allowlist (зокрема `git push`). Тому всі прогони — з
   `--setting-sources project,local --strict-mcp-config`. Окремий `claude -p "/context"` з тими самими прапорцями:
   у `a1` — жодного проєктного, особистого чи плагінного скіла; у `b1` — лише `integrating-n8n-webhooks | Project`;
   MCP-інструментів — 0 в обох. Однаковим для всіх 6 лишився `~/.claude/CLAUDE.md` (мій «working agreement»:
@@ -38,15 +39,18 @@
   самі значення). Сценарій надсилає форму `/quotes/new` так, як її надіслав би браузер без
   JavaScript (приховані `$ACTION_*` з HTML + поля). Час рахується від запиту до відповіді; потім відкривається `/quotes/<id>` одразу й
   через 9 с.
+- **Як запускали:** усі 6 сесій — одночасно, у фоні, кожна у своїй копії (`run-arm.sh <arm>` з однаковими
+  прапорцями; dev-сервер агентам заборонено, тож портів вони не ділили). Тривалість сесій — 223–536 с, усі
+  завершились за ~9 хв; сценарії з моком — потім, по одній копії, на порту 3000.
 - **Правило вибору прогону B для фічі — записане до прогонів** (15:31:45 UTC): найменше FAIL
   `--changed-since base` → сценарій з моком пройшов → менше змінених файлів → нічия = B1.
 - **Базова лінія `check-contract.mjs` на копії до прогону** (увесь код, без `--changed-since`), однакова для
-  A і B: `Summary: 3 PASS, 6 FAIL, 4 N/A` — FAIL C1 (`.env.example:6`), C3–C6 (`app/actions.ts:54`), C12. Це
+  A і B: `Summary: 3 PASS, 6 FAIL, 4 N/A` — FAIL C1 (`.env.example:6`), C3–C6 (`app/actions.ts:56` — у BASE рядок зсунувся на 2 через імпорти Task A), C12. Це
   старий `lead-created`, в оцінку прогонів він не йде.
 
-`check-contract.mjs` на коді прогонів нижче запущено версією скрипта з `54ceb41`. Перший перерахунок дав хибні FAIL:
-C6 для A2 і C8 для A3 (див. «Що скіл змінив у собі»). Обидва виправлено в скрипті; на B-прогони виправлення
-не вплинуло — 0 FAIL і до, і після.
+`check-contract.mjs` на коді прогонів нижче — остаточною версією скрипта (`fc40a70`). Перший перерахунок дав
+хибні FAIL: C6 для A2 і C8 для A3 (див. «Що скіл змінив у собі»). Обидва виправлено в скрипті; на B-прогони
+жодна зміна скрипта не вплинула — 0 FAIL щоразу. Повний вивід кожного прогону — у згортках під таблицями.
 
 ## A — без скіла
 
@@ -80,6 +84,113 @@ C6 для A2 і C8 для A3 (див. «Що скіл змінив у собі»
 | Змінні, додані в `.env.example` | `N8N_QUOTE_WEBHOOK_URL` (`/webhook-test/`), `N8N_CALLBACK_SECRET` (порожнє), `APP_BASE_URL` | `N8N_QUOTE_WEBHOOK_URL` (`/webhook-test/`), `N8N_CALLBACK_SECRET=change-me`, `APP_URL` | `N8N_QUOTE_WEBHOOK_URL` (`/webhook-test/`), `N8N_CALLBACK_SECRET` (порожнє) |
 | `check-contract --changed-since base` | 4 PASS, **9 FAIL**: C1 C3 C5 C6 C7 C8 C9 C10 C12 | 5 PASS, **8 FAIL**: C1 C3 C4 C5 C7 C9 C10 C12 | 4 PASS, **9 FAIL**: C1 C3 C4 C5 C6 C7 C9 C10 C12 |
 | Час сесії / вартість / кроки | 295 с · $1.26 · 53 | 536 с · $2.05 · 82 | 348 с · $1.46 · 57 |
+
+<details><summary>A1: повний вивід <code>check-contract.mjs --root ../leaddesk-ab-a1 --changed-since base</code></summary>
+
+```
+check-contract · root ../leaddesk-ab-a1 · 35 file(s) · changed since base: 12 file(s)
+C1   FAIL no n8n test URL (/webhook-test/)
+       .env.example:11  test URL /webhook-test/
+C2   PASS no NEXT_PUBLIC_N8N_* variables
+C3   FAIL n8n calls only in lib/n8n/client.ts (server-only)
+       app/quotes/actions.ts:33  fetch to n8n outside lib/n8n/client.ts
+C4   PASS timeout on every n8n fetch
+C5   FAIL x-n8n-token, idempotency-key, x-correlation-id on every n8n fetch
+       app/quotes/actions.ts:33  fetch to n8n without header(s): x-n8n-token, idempotency-key, x-correlation-id
+C6   FAIL Server Actions call n8n only inside after()
+       app/quotes/actions.ts:33  Server Action awaits n8n, not in after()
+C7   FAIL callback: raw body, JSON only after signature check
+       app/api/quotes/[id]/callback/route.ts:16  body is not read raw (request.text() or a request.body reader)
+       app/api/quotes/[id]/callback/route.ts:16  no signature verification (timingSafeEqual) in POST
+C8   FAIL callback: length check + timingSafeEqual, no ===
+       app/api/quotes/[id]/callback/route.ts:16  timingSafeEqual is not used
+C9   FAIL callback: +-300 s timestamp window
+       app/api/quotes/[id]/callback/route.ts:16  no x-n8n-timestamp check: |now - timestamp| > 300 s -> 401
+C10  FAIL callback: 64 KB limit -> 413
+       app/api/quotes/[id]/callback/route.ts:16  no limit on the body actually read: > 64 KB -> 413 (content-length alone is not enough)
+C11  PASS no runtime = "edge"
+C12  FAIL .env.example and N8N_* names follow the contract
+       app/quotes/actions.ts:33  N8N_QUOTE_WEBHOOK_URL is not a contract variable
+       .env.example  missing N8N_WEBHOOK_BASE_URL
+       .env.example  missing N8N_WEBHOOK_TOKEN
+       .env.example:11  N8N_QUOTE_WEBHOOK_URL is not a contract variable
+       .env.example:16  N8N_CALLBACK_SECRET: secrets in .env.example must be change-me-… placeholders (value not shown)
+C13  PASS no bodies, PII or secrets in logs
+Summary: 4 PASS, 9 FAIL, 0 N/A
+```
+
+</details>
+
+<details><summary>A2: повний вивід <code>check-contract.mjs --root ../leaddesk-ab-a2 --changed-since base</code></summary>
+
+```
+check-contract · root ../leaddesk-ab-a2 · 38 file(s) · changed since base: 16 file(s)
+C1   FAIL no n8n test URL (/webhook-test/)
+       .env.example:9  test URL /webhook-test/
+C2   PASS no NEXT_PUBLIC_N8N_* variables
+C3   FAIL n8n calls only in lib/n8n/client.ts (server-only)
+       app/quotes/actions.ts:30  fetch to n8n outside lib/n8n/client.ts
+C4   FAIL timeout on every n8n fetch
+       app/quotes/actions.ts:30  fetch to n8n without signal: AbortSignal.timeout(...)
+C5   FAIL x-n8n-token, idempotency-key, x-correlation-id on every n8n fetch
+       app/quotes/actions.ts:30  fetch to n8n without header(s): x-n8n-token, idempotency-key, x-correlation-id
+C6   PASS Server Actions call n8n only inside after()
+C7   FAIL callback: raw body, JSON only after signature check
+       app/api/quotes/[id]/complete/route.ts:10  body is not read raw (request.text() or a request.body reader)
+C8   PASS callback: length check + timingSafeEqual, no ===
+C9   FAIL callback: +-300 s timestamp window
+       app/api/quotes/[id]/complete/route.ts:10  no x-n8n-timestamp check: |now - timestamp| > 300 s -> 401
+C10  FAIL callback: 64 KB limit -> 413
+       app/api/quotes/[id]/complete/route.ts:10  no limit on the body actually read: > 64 KB -> 413 (content-length alone is not enough)
+C11  PASS no runtime = "edge"
+C12  FAIL .env.example and N8N_* names follow the contract
+       app/quotes/actions.ts:30  N8N_QUOTE_WEBHOOK_URL is not a contract variable
+       .env.example  missing N8N_WEBHOOK_BASE_URL
+       .env.example  missing N8N_WEBHOOK_TOKEN
+       .env.example  missing APP_BASE_URL
+       .env.example:9  N8N_QUOTE_WEBHOOK_URL is not a contract variable
+       .env.example:14  N8N_CALLBACK_SECRET: secrets in .env.example must be change-me-… placeholders (value not shown)
+C13  PASS no bodies, PII or secrets in logs
+Summary: 5 PASS, 8 FAIL, 0 N/A
+```
+
+</details>
+
+<details><summary>A3: повний вивід <code>check-contract.mjs --root ../leaddesk-ab-a3 --changed-since base</code></summary>
+
+```
+check-contract · root ../leaddesk-ab-a3 · 35 file(s) · changed since base: 10 file(s)
+C1   FAIL no n8n test URL (/webhook-test/)
+       .env.example:10  test URL /webhook-test/
+C2   PASS no NEXT_PUBLIC_N8N_* variables
+C3   FAIL n8n calls only in lib/n8n/client.ts (server-only)
+       app/quotes/actions.ts:29  fetch to n8n outside lib/n8n/client.ts
+C4   FAIL timeout on every n8n fetch
+       app/quotes/actions.ts:29  fetch to n8n without signal: AbortSignal.timeout(...)
+C5   FAIL x-n8n-token, idempotency-key, x-correlation-id on every n8n fetch
+       app/quotes/actions.ts:29  fetch to n8n without header(s): x-n8n-token, idempotency-key, x-correlation-id
+C6   FAIL Server Actions call n8n only inside after()
+       app/quotes/actions.ts:29  Server Action awaits n8n, not in after()
+C7   FAIL callback: raw body, JSON only after signature check
+       app/api/quotes/[id]/callback/route.ts:32  body is not read raw (request.text() or a request.body reader)
+C8   PASS callback: length check + timingSafeEqual, no ===
+C9   FAIL callback: +-300 s timestamp window
+       app/api/quotes/[id]/callback/route.ts:32  no x-n8n-timestamp check: |now - timestamp| > 300 s -> 401
+C10  FAIL callback: 64 KB limit -> 413
+       app/api/quotes/[id]/callback/route.ts:32  no limit on the body actually read: > 64 KB -> 413 (content-length alone is not enough)
+C11  PASS no runtime = "edge"
+C12  FAIL .env.example and N8N_* names follow the contract
+       app/quotes/actions.ts:29  N8N_QUOTE_WEBHOOK_URL is not a contract variable
+       .env.example  missing N8N_WEBHOOK_BASE_URL
+       .env.example  missing N8N_WEBHOOK_TOKEN
+       .env.example  missing APP_BASE_URL
+       .env.example:10  N8N_QUOTE_WEBHOOK_URL is not a contract variable
+       .env.example:14  N8N_CALLBACK_SECRET: secrets in .env.example must be change-me-… placeholders (value not shown)
+C13  PASS no bodies, PII or secrets in logs
+Summary: 4 PASS, 9 FAIL, 0 N/A
+```
+
+</details>
 
 Журнал мока (сценарій форма → колбек → `/quotes/<id>`):
 
@@ -126,6 +237,72 @@ A3  POST /webhook-test/quote-request -> 404 in 0 ms  | headers: accept,accept-la
 | Змінні в `.env.example` | `N8N_WEBHOOK_BASE_URL`, `N8N_WEBHOOK_TOKEN`, `N8N_CALLBACK_SECRET`, `APP_BASE_URL` | ті самі 4 | ті самі 4 |
 | `check-contract --changed-since base` | **13 PASS, 0 FAIL** | **13 PASS, 0 FAIL** | **13 PASS, 0 FAIL** |
 | Час сесії / вартість / кроки | 342 с · $1.71 · 66 | 273 с · $1.25 · 52 | 223 с · $1.02 · 42 |
+
+<details><summary>B1: повний вивід <code>check-contract.mjs --root ../leaddesk-ab-b1 --changed-since base</code></summary>
+
+```
+check-contract · root ../leaddesk-ab-b1 · 36 file(s) · changed since base: 9 file(s)
+C1   PASS no n8n test URL (/webhook-test/)
+C2   PASS no NEXT_PUBLIC_N8N_* variables
+C3   PASS n8n calls only in lib/n8n/client.ts (server-only)
+C4   PASS timeout on every n8n fetch
+C5   PASS x-n8n-token, idempotency-key, x-correlation-id on every n8n fetch
+C6   PASS Server Actions call n8n only inside after()
+C7   PASS callback: raw body, JSON only after signature check
+C8   PASS callback: length check + timingSafeEqual, no ===
+C9   PASS callback: +-300 s timestamp window
+C10  PASS callback: 64 KB limit -> 413
+C11  PASS no runtime = "edge"
+C12  PASS .env.example and N8N_* names follow the contract
+C13  PASS no bodies, PII or secrets in logs
+Summary: 13 PASS, 0 FAIL, 0 N/A
+```
+
+</details>
+
+<details><summary>B2: повний вивід <code>check-contract.mjs --root ../leaddesk-ab-b2 --changed-since base</code></summary>
+
+```
+check-contract · root ../leaddesk-ab-b2 · 37 file(s) · changed since base: 10 file(s)
+C1   PASS no n8n test URL (/webhook-test/)
+C2   PASS no NEXT_PUBLIC_N8N_* variables
+C3   PASS n8n calls only in lib/n8n/client.ts (server-only)
+C4   PASS timeout on every n8n fetch
+C5   PASS x-n8n-token, idempotency-key, x-correlation-id on every n8n fetch
+C6   PASS Server Actions call n8n only inside after()
+C7   PASS callback: raw body, JSON only after signature check
+C8   PASS callback: length check + timingSafeEqual, no ===
+C9   PASS callback: +-300 s timestamp window
+C10  PASS callback: 64 KB limit -> 413
+C11  PASS no runtime = "edge"
+C12  PASS .env.example and N8N_* names follow the contract
+C13  PASS no bodies, PII or secrets in logs
+Summary: 13 PASS, 0 FAIL, 0 N/A
+```
+
+</details>
+
+<details><summary>B3: повний вивід <code>check-contract.mjs --root ../leaddesk-ab-b3 --changed-since base</code></summary>
+
+```
+check-contract · root ../leaddesk-ab-b3 · 36 file(s) · changed since base: 9 file(s)
+C1   PASS no n8n test URL (/webhook-test/)
+C2   PASS no NEXT_PUBLIC_N8N_* variables
+C3   PASS n8n calls only in lib/n8n/client.ts (server-only)
+C4   PASS timeout on every n8n fetch
+C5   PASS x-n8n-token, idempotency-key, x-correlation-id on every n8n fetch
+C6   PASS Server Actions call n8n only inside after()
+C7   PASS callback: raw body, JSON only after signature check
+C8   PASS callback: length check + timingSafeEqual, no ===
+C9   PASS callback: +-300 s timestamp window
+C10  PASS callback: 64 KB limit -> 413
+C11  PASS no runtime = "edge"
+C12  PASS .env.example and N8N_* names follow the contract
+C13  PASS no bodies, PII or secrets in logs
+Summary: 13 PASS, 0 FAIL, 0 N/A
+```
+
+</details>
 
 Журнал мока:
 
@@ -187,7 +364,16 @@ B3  POST /webhook/quote-request -> 202 in 0 ms auth=ok idempotency=new | … | b
   - `ca5b1ee` — `npm run lint` давав 5 попереджень `no-unused-expressions` на `check-contract.mjs` (їх бачили й
     B-агенти). Скрипт переписано без виразів через кому; вивід на `main` і самотест не змінились.
   - `54ceb41` — C8 давав хибний FAIL для A3: правий операнд `expectedBuf.length !== providedBuf.length) return false`
-    не розпізнавався як порівняння довжин. Самотест після всіх виправлень — 25/25, вивід на `main` не змінився.
+    не розпізнавався як порівняння довжин.
+  - Після сліпого рев'ю всієї гілки: `fc40a70` (контрприклади до `check-contract.mjs`: незахищений колбек, проігнорований
+    `timingSafeEqual`, `import * as`, дані форми в журналі, ліміт лише за `content-length`, `--changed-since` у підтеці),
+    `3dbc7c6` і `5f83104` (узгодження текстів обох скілів). Самотест — 33/33, вивід на `main` не змінився, числа A/B
+    вище не змінились.
+- **Виправлення коду за сліпим рев'ю** (після перенесення, окремими комітами): `79d721f` — немає змінної середовища →
+  запит `failed`, а не вічне «У черзі»; `a0773fb` — тіло колбека читається потоком з обривом на 64 КБ (chunked-запит
+  без `content-length`); `6681c69` — пізній підписаний колбек може виправити `failed` з боку тригера; `242d017` —
+  межі довжини полів і бюджет як текст (`5,000` більше не губиться мовчки); `acbed72` — UUID для `lead-created`,
+  аудит в окремому `after()`, CRLF у нотатках.
 - **Ключі контракту в `.env.example`:** `N8N_WEBHOOK_BASE_URL=http://127.0.0.1:5678/webhook`,
   `N8N_WEBHOOK_TOKEN=change-me-webhook-token`, `N8N_CALLBACK_SECRET=change-me-callback-secret`,
   `APP_BASE_URL=http://127.0.0.1:3000`; `/webhook-test/` немає. У `.env.local` — ті самі 4 ключі зі
@@ -212,14 +398,15 @@ B3  POST /webhook/quote-request -> 202 in 0 ms auth=ok idempotency=new | … | b
   Summary: 13 PASS, 0 FAIL, 0 N/A
   ```
 - **Сценарій «форма → колбек → `/quotes/<id>`» на гілці** (продакшн-збірка, той самий мок з `.env.local`
-  гілки):
-  - форма кошторису → 303 за 12 мс;
+  гілки, після виправлень за рев'ю):
+  - форма кошторису → 303 за 13 мс;
   - мок — `POST /webhook/quote-request -> 202 in 1 ms auth=ok idempotency=new`, потім
-    `callback POST http://127.0.0.1:3000/api/n8n/quote-request -> 202 in 25 ms (try 1/3)`;
+    `callback POST http://127.0.0.1:3000/api/n8n/quote-request -> 202 in 36 ms (try 1/3)`;
   - `/quotes/<id>` — «У черзі» → «Кошторис готовий · Завантажити кошторис (PDF)»;
-  - форма з помилками без JS: `role="alert"`, 4 поля з `aria-invalid="true"`, введений email на місці;
-  - стара форма заявки: відповідь за 136 мс, мок — `POST /webhook/lead-created -> 202 in 0 ms auth=ok idempotency=new`;
-  - матриця колбеків (`send-signed-callback.mjs`) — 11/11 як очікувано;
+  - форма з помилками без JS: `role="alert"`, 4 поля з `aria-invalid="true"`, введене (зокрема бюджет `5,000`) на місці;
+  - стара форма заявки: відповідь за 135 мс, мок — `POST /webhook/lead-created -> 202 in 0 ms auth=ok idempotency=new`;
+  - матриця колбеків (`send-signed-callback.mjs`) — 12/12 як очікувано, зокрема chunked-тіло > 64 КБ без `content-length` → 413;
+  - без `APP_BASE_URL` (шаблонна копія) запит стає `failed`, у журналі — лише `misconfigured APP_BASE_URL is not set`;
   - журнал сервера — лише рядки `n8n out/in` з подією, correlation id, кодом і розміром; email, компанії й
     опису — 0 входжень.
 - **Реєстр інтеграцій:** `docs/n8n-integrations.md` — `quote-request` (Respond to Webhook 202 + колбек) і

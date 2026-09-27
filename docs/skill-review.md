@@ -1,8 +1,8 @@
 # Рев'ю стороннього скіла: `vercel-react-best-practices`
 
-> Рев'ю зроблено **до** встановлення (розділи 1–4 і 6 закомічено окремим комітом раніше за коміт
-> зі скілом). Розділ 5 дописано після виправлень Task A — там поради, звірені з документацією
-> Next.js 16.3.5 під час роботи.
+> Рев'ю зроблено **до** встановлення: розділи 1–4, план розділу 6 і вердикт закомічено окремим комітом
+> `0458a5b` (17:37:13) раніше за коміт зі скілом `d5aad7a` (17:42:44). Після встановлення дописано розділ 5
+> (поради, звірені з документацією Next.js 16.3.5 під час Task A) і фактичні результати в розділі 6.
 
 **Дата, інструмент, ОС:** 27.09.2026 · Claude Code 2.1.278 · macOS (Darwin 25.6) + zsh · Node 24.16.0
 
@@ -64,7 +64,9 @@ Claude Code автоматично підвантажив `CLAUDE.md` того �
 - Де взяли: <https://skills.sh/vercel-labs/agent-skills/vercel-react-best-practices> і сторінки
   `…/security/agent-trust-hub`, `…/security/socket`, `…/security/snyk` (читали у вбудованому браузері;
   там же: 747.1K встановлень, 31.6K зірок, first seen 19.01.2026).
-- Чому CLI не показав блок: у `--list` вище стояв `DISABLE_TELEMETRY=1` — з ним CLI аудити не завантажує
+- Блок «Security Risk Assessments» у CLI: встановлення запускала людина у своєму терміналі; сам блок у цю
+  роботу не вставлено, тож джерело аудитів вище — лише skills.sh.
+- Чому CLI не показав блок у `--list`: у `--list` вище стояв `DISABLE_TELEMETRY=1` — з ним CLI аудити не завантажує
   взагалі. Встановлення в агентській сесії CLI сам запускає з `--yes`, тож навіть показаний блок не дав би
   шансу відмовитись. Тому встановлення запускає людина у своєму терміналі без `DISABLE_TELEMETRY` (розділ 6).
 - До чого прив'язаний аудит: до «репозиторій + назва скіла», не до тега. Socket вказує лише хеш вмісту
@@ -92,8 +94,10 @@ Claude Code автоматично підвантажив `CLAUDE.md` того �
 |---|---|---|---|
 | `async-parallel` | незалежні `await` → `Promise.all` | `01-app/01-getting-started/06-fetching-data.md:462-468` — послідовні `await` в одному компоненті блокують один одного; `:476` — «await them with `Promise.all`» | застосовано (`app/dashboard/page.tsx`), виміряно |
 | `server-cache-react` | `React.cache()` для дедуплікації в межах запиту | `06-fetching-data.md:602-604` — мемоізація за тими самими аргументами, лише в межах одного запиту; автоматично мемоізується лише `fetch` (`04-functions/fetch.md:88`), а наша «база» — не `fetch` | застосовано; в нашому коді порада мала підступ: `getWorkspace` уже був у `cache()`, але з аргументом-об'єктом `{ slug }`, тож кеш ніколи не влучав — треба було змінити сигнатуру на рядок |
+| `server-serialization` | передавати в Client Component лише потрібні поля | `01-app/01-getting-started/05-server-and-client-components.md:113` — RSC Payload несе серіалізоване дерево в браузер; `:298` — props Client Components мають бути серіалізовними, тобто все передане йде клієнту | застосовано (`LeadRow` з 5 полів); виміряно (RSC 315 197 → 31 257 Б, `internalNotes`/IP у браузері — 0) |
 | `server-auth-actions` | Server Action — публічний ендпоінт, перевіряй сесію всередині | `01-app/02-guides/data-security.md:291` — «treat Server Actions as reachable via direct POST requests»; `:339`, `:368` — перевірка на рівні сторінки не поширюється на дії | застосовано; до виправлення анонімний POST з `Next-Action` видалив лід — `proxy.ts` цього не зупиняє |
 | `bundle-dynamic-imports` | `next/dynamic` для важких компонентів | `01-app/02-guides/lazy-loading.md:66,94-95` — `ssr: false` працює лише в Client Components; у Server Component це помилка збірки | застосовано саме в `components/leads-toolbar.tsx` (`"use client"`). У `app/dashboard/page.tsx` (Server Component) та сама порада зламала б збірку |
+| `bundle-conditional` | модуль вантажити лише тоді, коли функцію ввімкнено | `01-app/02-guides/lazy-loading.md:49` — «Load on demand, only when/if the condition is met»; `:97-119` — зовнішні бібліотеки через `await import()` лише тоді, коли потрібні | застосовано разом з `bundle-dynamic-imports`: `exceljs` — `await import()` у обробнику експорту; виміряно (JS при відкритті 1827 → 573 KiB) |
 | `bundle-barrel-imports` (`lodash`) | імпортувати напряму, не з барел-файлу | `02-pages/…/optimizePackageImports.md` і `01-app/03-api-reference/05-config/01-next-config-js/optimizePackageImports.md:21-25` — у дефолтному списку є `lodash-es`, **немає** `lodash` | порада для нашого `import { debounce } from "lodash"` правдива; у Task A не застосовували (див. «що не застосували» у `docs/verification.md`) |
 | `server-after-nonblocking` | повільні побічні ефекти — в `after()` | `01-app/03-api-reference/04-functions/after.md:8` — працює в Server Functions і Route Handlers | правдива; для `submitLead` свідомо відкладено до Task D (виклик n8n переробляємо за контрактом скіла, інакше BASE для A/B отримав би частину контракту заздалегідь) |
 
