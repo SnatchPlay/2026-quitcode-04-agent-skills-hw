@@ -110,7 +110,7 @@ export async function addNote(
     };
   }
 
-  await db.appendNote(id, text);
+  if (!(await db.appendNote(id, text))) throw new Error("Lead not found");
   revalidatePath(`/dashboard/leads/${id}`);
   after(() => logAudit("lead.note_added", id));
   return { status: "ok" };
