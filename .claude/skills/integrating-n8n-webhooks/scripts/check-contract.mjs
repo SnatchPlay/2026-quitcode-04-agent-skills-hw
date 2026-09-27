@@ -130,11 +130,17 @@ function stripComments(src) {
     const c = src[i];
     const n = src[i + 1];
     if (c === "/" && n === "/") {
-      while (i < src.length && src[i] !== "\n") (out += " "), i++;
+      while (i < src.length && src[i] !== "\n") {
+        out += " ";
+        i++;
+      }
     } else if (c === "/" && n === "*") {
       out += "  ";
       i += 2;
-      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) (out += src[i] === "\n" ? "\n" : " "), i++;
+      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) {
+        out += src[i] === "\n" ? "\n" : " ";
+        i++;
+      }
       out += "  ";
       i += 2;
     } else if (c === '"' || c === "'" || c === "`") {
@@ -142,12 +148,16 @@ function stripComments(src) {
       out += c;
       i++;
       while (i < src.length && src[i] !== quote) {
-        if (src[i] === "\\") (out += src[i] + (src[i + 1] ?? "")), (i += 2);
-        else (out += src[i]), i++;
+        const step = src[i] === "\\" ? 2 : 1;
+        out += src.slice(i, i + step);
+        i += step;
       }
       out += src[i] ?? "";
       i++;
-    } else (out += c), i++;
+    } else {
+      out += c;
+      i++;
+    }
   }
   return out;
 }
