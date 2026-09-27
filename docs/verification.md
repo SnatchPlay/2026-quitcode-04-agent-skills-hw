@@ -13,6 +13,7 @@
 | Skill | Звідки | Примітка |
 |---|---|---|
 | `vercel-react-best-practices` | Project | після коміту `d5aad7a` |
+| `building-client-form` | Project | після коміту `eb74387`; видно в `/context` з `--setting-sources project,local` |
 
 - Особисті скіли, які теж видно: `code-craft`, `find-skills`, `no-mistakes` (User) і скіли `anthropic-skills:*`
   (claude.ai sync), а також `~/.claude/CLAUDE.md` у Memory files. `find-skills` поставив сам CLI `skills`
@@ -77,3 +78,43 @@ RSC-відповіді, сума розмірів JS-чанків, на які �
   у межах похибки для 200 рядків.
 - `npm run lint`, `npm run build` після кожного з п'яти виправлень — без помилок (журнали кожного
   прогону збережено поза репозиторієм).
+
+## Task B — `building-client-form`
+
+- Скіл: коміт `eb74387`; `name` = тека, `description` — 817 символів (≤ 1024), `SKILL.md` — 127 рядків.
+- Запит у свіжій сесії (скіл не названо), з кореня репозиторію:
+  > На сторінці ліда в дашборді (/dashboard/leads/[id]) додай форму «Додати нотатку»: одне текстове поле до 500 символів; нотатка дописується до внутрішніх нотаток ліда.
+
+  ```bash
+  claude -p --setting-sources project,local --strict-mcp-config --permission-mode acceptEdits \
+    --allowedTools "Bash(npm run lint)" "Bash(npm run build)" "Bash(npx tsc --noEmit)" \
+    --output-format stream-json --verbose < prompt1.txt > run1.jsonl
+  ```
+  `--setting-sources project,local` — щоб headless-агент не отримав особистий allowlist (там є `git push`)
+  і особисті скіли. Модель — `claude-opus-5[1m]` (подія `init`); видимі скіли з `init`: `building-client-form`,
+  `vercel-react-best-practices` і вбудовані Claude Code, особистих немає.
+- **Чи спрацював скіл і як це видно:** так, з першої спроби. Перший виклик інструмента в сесії —
+  `Skill` з `"skill":"building-client-form"`, до читання будь-якого файлу проєкту. `description` не змінювали.
+- Що зробив агент (коміт `6f6e250` — без змін, як написав агент): Server Action `addNote` в `app/actions.ts`
+  (сесія й належність ліда через наявний `requireLeadInUserWorkspace` до запису, валідація 1–500 символів,
+  відповідь `{ status, errors, values }`, аудит в `after()`), `components/lead-note-form.tsx`
+  (`useActionState`, `label htmlFor`, `aria-invalid`, `aria-describedby`, `role="alert"`,
+  `defaultValue={values?.text}`), `db.appendNote`, `NOTE_MAX_LENGTH` у `lib/types.ts`. Агент сам прогнав
+  `npm run lint` і `npm run build`, але решту Verify **не** зробив: `npm run dev` не було в дозволах, і він
+  зупинився й написав, що не перевірено, замість обходити заборону. Ще дві відмови в журналі —
+  `ls ~/.claude/skills`: агент шукав `code-craft`/`self-review`, яких вимагає мій глобальний `~/.claude/CLAUDE.md`.
+- Пункти Verify зі скіла — перевірив я, на продакшн-збірці, запитами як від браузера **без** JavaScript
+  (multipart з прихованими полями `$ACTION_*` з HTML форми + `Origin`), скрипт поза репозиторієм:
+
+  | Пункт Verify | Результат |
+  |---|---|
+  | `npm run lint`, `npm run build` | без помилок |
+  | Порожня відправка | на коді агента — **відповіді немає** (`curl -m 15` → timeout; той самий запит із заголовком `Next-Action`, як від JS-клієнта, — 200 за 0.21 с з `{"status":"invalid",…}`). Причина: `useActionState(addNote.bind(null, leadId))` — прив'язана дія без JS у Next.js 16.3.5 зависає. Після `bab74df` (id прихованим полем): HTTP 200, `role="alert"`, `aria-invalid="true"`, `aria-describedby="note-text-error"`, текст «Від 1 до 500 символів» |
+  | Введене не зникає | 601 символ → помилка, перші 500 символів введеного — у `textarea` |
+  | Відправка без JavaScript | валідна нотатка: HTTP 200 за 510 мс, нотатка на сторінці ліда |
+  | Дія без сесії | cookie `demo-u_nobody` (проходить `proxy.ts`, бо той дивиться лише на наявність cookie) → 303 на `/login`, нотатку не записано; користувач іншого workspace (`demo-u_marta`) → `Error: Lead not found`, не записано |
+  | Журнал сервера | 0 рядків із текстом нотатки; `db:appendNote` — 1 раз (лише валідна відправка), `db:insertAuditEntry` — 1 раз (в `after()`) |
+  | Відповідь не чекає зовнішніх сервісів | аудит (250 мс) — в `after()`; 510 мс = сесія, лід, запис і повторний рендер сторінки |
+
+- Що це змінило в скілі: приклад у самому `SKILL.md` містив той самий `.bind()` — агент його й повторив.
+  Виправлено скіл (коміт `9283ab6`): id запису прихованим полем, крок 8 і пункт чекліста.
